@@ -1,0 +1,12 @@
+﻿1. Initialize memory cache and list to track table names.
+2. Configure Access and SQL Server connection strings.
+3. Create instances of AccessDataLoader and SqlServerDataLoader with dependencies.
+4. Load all table data from Access database into memory.
+    a. Connect to Access database.
+    b. Retrieve schema to identify all tables.
+    c. For each table, load data into memory and record table name.
+5. Transfer all data from memory to SQL Server.
+    a. For each table in memory, perform a bulk insert into the corresponding SQL Server table.
+    b. Use transactions to ensure data integrity.
+6. Handle any errors during data transfer and log appropriately.
+7. Complete the process and clean up resources.
