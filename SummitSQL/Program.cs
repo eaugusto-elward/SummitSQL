@@ -4,11 +4,19 @@ using System;
 using System.Collections.Generic;
 using System.Data;
 using SummitSQL;
+using Serilog;
 
 class Program
 {
     static void Main(string[] args)
     {
+        Log.Logger = new LoggerConfiguration()
+            .MinimumLevel.Debug()
+            .WriteTo.Console()
+            .WriteTo.File("logs\\dataSyncLog.txt", rollingInterval: RollingInterval.Day)
+            .CreateLogger();
+
+
         // Setup Dependency Injection
         var serviceProvider = new ServiceCollection()
             .AddMemoryCache()

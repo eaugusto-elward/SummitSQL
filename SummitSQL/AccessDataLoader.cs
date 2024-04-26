@@ -3,6 +3,7 @@ using System.Data;
 using System.Data.OleDb;
 using Microsoft.Extensions.Caching.Memory;
 using System.Collections.Generic;
+using Serilog;
 
 /// <summary>
 /// Responsible for loading data from an Access database into memory.
@@ -75,4 +76,53 @@ public class AccessDataLoader
         return tableName.Replace(" ", "-");
     }
 
+    public bool CheckAndUpdateTable(string tableName)
+    {
+        var newData = LoadTableDataDirectly(tableName);
+        if (!_cache.TryGetValue(tableName, out DataTable currentData) || !TablesMatch(currentData, newData, tableName))
+        {
+            _cache.Set(tableName, newData);
+            return true;
+        }
+        return false;
+    }
+
+    private DataTable LoadTableDataDirectly(string tableName)
+    {
+        using (var connection = new OleDbConnection(_connectionString))
+        {
+            connection.Open();
+            var cmd = new OleDbCommand($"SELECT * FROM [{tableName}]", connection);
+            var adapter = new OleDbDataAdapter(cmd);
+            var dt = new DataTable();
+            adapter.Fill(dt);
+            return dt;
+        }
+    }
+
+    private bool TablesMatch(DataTable dt1, DataTable dt2, string tableName)
+    {
+        if (dt1.Rows.Count != dt2.Rows.Count)
+            return false;
+
+        for (int i = 0; i < dt1.Rows.Count; i++)
+        {
+            for (int j = 0; j < dt1.Columns.Count; j++)
+            {
+                if (!Equals(dt1.Rows[i][j], dt2.Rows[i][j]))
+                {
+                    LogChange(tableName, DateTime.Now, dt1.Columns[j].ColumnName, dt1.Rows[i][j], dt2.Rows[i][j]);
+                }
+            }
+        }
+        return true; // If all rows match, return true, else false
+    }
+
+    private void LogChange(string tableName, DateTime timestamp, string columnName, object oldValue, object newValue)
+    {
+        Log.Information("Change detected in table {TableName} at {Timestamp}: Column {ColumnName} changed from {OldValue} to {NewValue}",
+                        tableName, timestamp, columnName, oldValue, newValue);
+    }
 }
+
+
