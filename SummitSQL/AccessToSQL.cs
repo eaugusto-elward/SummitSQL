@@ -1,11 +1,8 @@
 ﻿using System;
-using System.Collections.Generic;
+using System.Data;
 using System.Data.OleDb;
 using System.Data.SqlClient;
-using System.Data;
-using System.Linq;
 using System.Text;
-using System.Threading.Tasks;
 
 namespace SummitSQL
 {
@@ -21,10 +18,6 @@ namespace SummitSQL
             _connectionString = connectionString;
         }
 
-        /// <summary>
-        /// Retrieves a list of all tables within the Access database.
-        /// </summary>
-        /// <returns>A DataTable containing information on all tables.</returns>
         public DataTable GetAccessTables()
         {
             using (var connection = new OleDbConnection(_connectionString))
@@ -34,11 +27,6 @@ namespace SummitSQL
             }
         }
 
-        /// <summary>
-        /// Retrieves column information for a specific table in the Access database.
-        /// </summary>
-        /// <param name="tableName">The name of the table to retrieve columns for.</param>
-        /// <returns>A DataTable containing column information.</returns>
         public DataTable GetTableColumns(string tableName)
         {
             using (var connection = new OleDbConnection(_connectionString))
@@ -48,7 +36,6 @@ namespace SummitSQL
             }
         }
     }
-
 
     /// <summary>
     /// Manages database schema operations for SQL Server.
@@ -62,85 +49,83 @@ namespace SummitSQL
             _sqlConnectionString = sqlConnectionString;
         }
 
-        /// <summary>
-        /// Ensures that a table exists in the SQL Server database. It sanitizes the table name
-        /// by replacing spaces with hyphens and handles SQL execution errors.
-        /// </summary>
-        /// <param name="columns">DataTable containing the schema for the table columns.</param>
-        /// <param name="tableName">The original name of the table as retrieved from Access.</param>
         public void CreateTable(DataTable columns, string tableName)
         {
             string sanitizedTableName = SanitizeTableName(tableName);
+            string createTableQuery = BuildCreateTableQuery(columns, sanitizedTableName);
 
             using (var connection = new SqlConnection(_sqlConnectionString))
             {
                 connection.Open();
-                string createTableQuery = BuildCreateTableQuery(columns, sanitizedTableName);
-
-                try
+                using (var command = new SqlCommand(createTableQuery, connection))
                 {
-                    using (var command = new SqlCommand(createTableQuery, connection))
+                    try
                     {
                         command.ExecuteNonQuery();
                         Console.WriteLine($"Table '{sanitizedTableName}' created in SQL Server.");
                     }
-                }
-                catch (SqlException ex)
-                {
-                    Console.WriteLine($"Failed to create table '{sanitizedTableName}': {ex.Message}");
+                    catch (SqlException ex)
+                    {
+                        Console.WriteLine($"Failed to create table '{sanitizedTableName}': {ex.Message}");
+                    }
                 }
             }
         }
 
-        /// <summary>
-        /// Sanitizes the table name to be compliant with SQL Server naming conventions.
-        /// This method replaces spaces with hyphens to ensure SQL Server can process the names without errors.
-        /// </summary>
-        /// <param name="tableName">The original table name.</param>
-        /// <returns>A sanitized table name suitable for SQL Server.</returns>
         private string SanitizeTableName(string tableName)
         {
             return tableName.Replace(" ", "-");
         }
 
-        /// <summary>
-        /// Builds the SQL command for creating a table based on the given columns and the sanitized table name.
-        /// </summary>
-        /// <param name="columns">DataTable with column definitions.</param>
-        /// <param name="sanitizedTableName">Sanitized table name.</param>
-        /// <returns>SQL command string for creating the table.</returns>
         private string BuildCreateTableQuery(DataTable columns, string sanitizedTableName)
         {
             StringBuilder createTableQuery = new StringBuilder($"CREATE TABLE [{sanitizedTableName}] (");
+
             foreach (DataRow column in columns.Rows)
             {
                 string columnName = column["COLUMN_NAME"].ToString();
-                string dataType = column["DATA_TYPE"].ToString();
-                string sqlDataType = ConvertToSqlDataType(dataType);
+                string sqlDataType = ConvertToSqlDataType(column["DATA_TYPE"].ToString(), column["CHARACTER_MAXIMUM_LENGTH"]);
                 createTableQuery.Append($"[{columnName}] {sqlDataType}, ");
             }
-            createTableQuery.Length -= 2; // Remove the trailing comma and space
-            createTableQuery.Append(")");
 
+            createTableQuery.Length -= 2;  // Remove the trailing comma and space
+            createTableQuery.Append(")");
             return createTableQuery.ToString();
         }
 
-        /// <summary>
-        /// Converts Access data types to SQL Server data types.
-        /// </summary>
-        /// <param name="accessDataType">Access data type as a string.</param>
-        /// <returns>SQL Server data type as a string.</returns>
-        private string ConvertToSqlDataType(string accessDataType)
+        private string ConvertToSqlDataType(string accessDataType, object maxLength)
         {
+            int length = maxLength != DBNull.Value ? Convert.ToInt32(maxLength) : -1;
+
             switch (accessDataType)
             {
                 case "DBTYPE_I4":
+                case "DBTYPE_I2":
                     return "INT";
                 case "DBTYPE_DBDATE":
-                    return "DATE";
+                case "DBTYPE_DBTIMESTAMP":
+                    return "DATETIME";
+                case "DBTYPE_R8":
+                    return "FLOAT";
+                case "DBTYPE_BOOL":
+                    return "BIT";
+                case "DBTYPE_GUID":
+                    return "UNIQUEIDENTIFIER";
+                case "DBTYPE_BYTES":
+                    return "VARBINARY(MAX)";
                 default:
-                    return "NVARCHAR(MAX)";
+                    // Ensure that length is not zero or negative, which is invalid in SQL Server for types that require length specifications.
+                    if (length <= 0)
+                    {
+                        // Defaulting to a sensible length or using MAX for unspecified or invalid lengths
+                        return "NVARCHAR(MAX)";
+                    }
+                    else
+                    {
+                        return $"NVARCHAR({length})";
+                    }
             }
         }
+
     }
 }

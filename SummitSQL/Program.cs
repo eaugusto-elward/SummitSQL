@@ -5,17 +5,23 @@ using System.Collections.Generic;
 using System.Data;
 using SummitSQL;
 using Serilog;
+using System.Diagnostics;
+using System.Text;
+using System.Threading.Tasks;
 
 class Program
 {
+    static bool syncActive = false; // Flag to control the sync process
+    static Task syncTask; // Task to run the synchronization process
+    static string verifyTableName = "tblPrinters"; // Table to verify data consistency
+
     static void Main(string[] args)
     {
         Log.Logger = new LoggerConfiguration()
             .MinimumLevel.Debug()
-            .WriteTo.Console()
-            .WriteTo.File("logs\\dataSyncLog.txt", rollingInterval: RollingInterval.Day)
+            //.WriteTo.Console()
+            .WriteTo.File("C:\\Users\\eaugusto\\Desktop\\Logs\\dataSyncLog.txt", rollingInterval: RollingInterval.Day)
             .CreateLogger();
-
 
         // Setup Dependency Injection
         var serviceProvider = new ServiceCollection()
@@ -26,7 +32,7 @@ class Program
         var tableNames = new List<string>();  // List to keep track of table names loaded into memory
 
         // Define connection strings for databases
-        var accessConnectionString = "Provider=Microsoft.ACE.OLEDB.12.0;Data Source=C:\\Users\\eliot\\Desktop\\SummitBE_local.accdb;";
+        var accessConnectionString = "Provider=Microsoft.ACE.OLEDB.12.0;Data Source=C:\\Users\\eaugusto\\Desktop\\SummitBE_local.accdb;";
         var sqlConnectionString = "Server=.\\summitlocal;Database=summitlocal;User Id=sa;Password=CTK1420!@;";
 
         // Declare and instantiate schema managers here
@@ -37,6 +43,8 @@ class Program
         var sqlLoader = new SqlServerDataLoader(sqlConnectionString, cache, tableNames);
 
         bool running = true;
+        Log.Information("Starting application");
+
         while (running)
         {
             Console.WriteLine("\nMain Menu:");
@@ -46,7 +54,11 @@ class Program
             Console.WriteLine("4 - Perform Database Migration");
             Console.WriteLine("5 - Load Access DB into Memory");
             Console.WriteLine("6 - Copy Data to SQL Server");
-            Console.WriteLine("7 - Exit");
+            Console.WriteLine("7 - Start Data Sync");
+            Console.WriteLine("8 - Stop Data Sync");
+            Console.WriteLine("9 - Exit");
+            Console.WriteLine("10 - Print Cached Data");
+            Console.WriteLine("11 - Verify Data Consistency between Access & SQL");
             Console.Write("Enter option: ");
 
             string option = Console.ReadLine();
@@ -67,7 +79,6 @@ class Program
                 case "4":
                     Console.WriteLine("Migrating Database...");
                     MigrateDatabase(accessSchemaManager, sqlSchemaManager);
-
                     break;
                 case "5":
                     Console.WriteLine("Loading Access Database into memory...");
@@ -80,14 +91,96 @@ class Program
                     Console.WriteLine("Data copied to SQL Server successfully.");
                     break;
                 case "7":
+                    Console.WriteLine("Starting data synchronization...");
+                    StartDataSync(accessLoader, sqlLoader, tableNames, cache);
+                    break;
+                case "8":
+                    Console.WriteLine("Stopping data synchronization...");
+                    StopDataSync();
+                    break;
+                case "9":
                     running = false;
+                    StopDataSync(); // Ensure sync is stopped before exiting
                     Console.WriteLine("Exiting program.");
+                    break;
+                case "10":
+                    accessLoader.PrintCachedData();
+                    break;
+                case "11":
+                    Log.Information("Case11");
+
+                    sqlLoader.VerifyDataConsistency(verifyTableName);
                     break;
                 default:
                     Console.WriteLine("Invalid option, please try again.");
                     break;
             }
         }
+    }
+
+    static void StartDataSync(AccessDataLoader accessLoader, SqlServerDataLoader sqlLoader, List<string> tableNames, IMemoryCache cache)
+    {
+        if (!syncActive)
+        {
+            syncActive = true;
+            syncTask = Task.Run(() => ContinuousDataCheck(accessLoader, sqlLoader, tableNames, cache));
+            Console.WriteLine("Data synchronization started.");
+        }
+        else
+        {
+            Console.WriteLine("Data synchronization is already running.");
+        }
+    }
+
+    static void StopDataSync()
+    {
+        if (syncActive)
+        {
+            syncActive = false;
+            syncTask?.Wait(); // Safely wait for the task to complete
+            Console.WriteLine("Data synchronization stopped.");
+        }
+        else
+        {
+            Console.WriteLine("Data synchronization is not active.");
+        }
+    }
+
+    static async Task ContinuousDataCheck(AccessDataLoader accessLoader, SqlServerDataLoader sqlLoader, List<string> tableNames, IMemoryCache cache)
+    {
+        Process secondConsole = new Process
+        {
+            StartInfo = new ProcessStartInfo("cmd.exe")
+            {
+                RedirectStandardInput = true,
+                UseShellExecute = false
+            }
+        };
+        secondConsole.Start();
+        using (StreamWriter sw = secondConsole.StandardInput)
+        {
+            if (sw.BaseStream.CanWrite)
+            {
+                while (syncActive)
+                {
+                    foreach (var tableName in tableNames)
+                    {
+                        bool updated = accessLoader.CheckAndUpdateTable(tableName);
+                        string status = updated ? "Updated" : "No Change";
+                        sw.WriteLine($"Check completed for {tableName}: {status}");
+                        if (updated)
+                        {
+                            if (cache.TryGetValue(tableName, out DataTable updatedTable))
+                            {
+                                sqlLoader.UpdateSqlServer(tableName, updatedTable);
+                            }
+                        }
+                        await Task.Delay(5000); // Check every 5 seconds
+                    }
+                }
+            }
+        }
+        secondConsole.WaitForExit();
     }
 
     static void TestConnection(string connectionString, string dbType)
@@ -129,7 +222,6 @@ class Program
             Console.WriteLine($"Unsupported database type: {dbType}");
         }
     }
-
 
     static void DropAllTables(string connectionString)
     {
@@ -186,5 +278,4 @@ class Program
         }
         Console.WriteLine("Database migration complete.");
     }
-
 }

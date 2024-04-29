@@ -4,6 +4,7 @@ using System.Data.OleDb;
 using Microsoft.Extensions.Caching.Memory;
 using System.Collections.Generic;
 using Serilog;
+using System.Text;
 
 /// <summary>
 /// Responsible for loading data from an Access database into memory.
@@ -32,11 +33,11 @@ public class AccessDataLoader
     /// </summary>
     public void LoadAllTablesIntoMemory()
     {
+        Log.Information("Loading Tables Into Memory");
         using (var connection = new OleDbConnection(_connectionString))
         {
             connection.Open();
             var schemaTable = connection.GetOleDbSchemaTable(OleDbSchemaGuid.Tables, new object[] { null, null, null, "TABLE" });
-
             foreach (DataRow row in schemaTable.Rows)
             {
                 var tableName = row["TABLE_NAME"].ToString();
@@ -100,29 +101,94 @@ public class AccessDataLoader
         }
     }
 
-    private bool TablesMatch(DataTable dt1, DataTable dt2, string tableName)
+    /// <summary>
+    /// Compares two DataTables to determine if they are identical.
+    /// </summary>
+    /// <param name="dt1">First DataTable to compare.</param>
+    /// <param name="dt2">Second DataTable to compare.</param>
+    /// <param name="tableName">The name of the table being compared.</param>
+    /// <returns>True if the tables match; otherwise, false.</returns>
+    private bool TablesMatch(DataTable sqlData, DataTable cachedData, string tableName)
     {
-        if (dt1.Rows.Count != dt2.Rows.Count)
-            return false;
+        Log.Information("Begin Table Matching");
 
-        for (int i = 0; i < dt1.Rows.Count; i++)
+        if (sqlData.Rows.Count != cachedData.Rows.Count)
         {
-            for (int j = 0; j < dt1.Columns.Count; j++)
+            Log.Information("Row count mismatch in {TableName}: SQL Server has {SqlRowCount} rows, Cache has {CacheRowCount} rows",
+                            tableName, sqlData.Rows.Count, cachedData.Rows.Count);
+            return false;
+        }
+
+        for (int i = 0; i < sqlData.Rows.Count; i++)
+        {
+            for (int j = 0; j < sqlData.Columns.Count; j++)
             {
-                if (!Equals(dt1.Rows[i][j], dt2.Rows[i][j]))
+                if (!Equals(sqlData.Rows[i][j], cachedData.Rows[i][j]))
                 {
-                    LogChange(tableName, DateTime.Now, dt1.Columns[j].ColumnName, dt1.Rows[i][j], dt2.Rows[i][j]);
+                    Log.Information("Data mismatch in {TableName} at row {Row}, column {Column}: SQL Server='{SqlValue}', Cache='{CacheValue}'",
+                                    tableName, i + 1, sqlData.Columns[j].ColumnName, sqlData.Rows[i][j], cachedData.Rows[i][j]);
+                    return false;
                 }
             }
         }
-        return true; // If all rows match, return true, else false
+        return true; // If all rows and columns match, return true
     }
 
+    /// <summary>
+    /// Logs a change detected in a table column.
+    /// </summary>
+    /// <param name="tableName">Table where the change occurred.</param>
+    /// <param name="timestamp">Timestamp of the change.</param>
+    /// <param name="columnName">Column that changed.</param>
+    /// <param name="oldValue">Old value of the column.</param>
+    /// <param name="newValue">New value of the column.</param>
     private void LogChange(string tableName, DateTime timestamp, string columnName, object oldValue, object newValue)
     {
         Log.Information("Change detected in table {TableName} at {Timestamp}: Column {ColumnName} changed from {OldValue} to {NewValue}",
                         tableName, timestamp, columnName, oldValue, newValue);
     }
+
+    /// <summary>
+    /// Prints the cached data for all loaded tables.
+    /// </summary>
+    public void PrintCachedData()
+    {
+        foreach (var tableName in _tableNames)
+        {
+            if (_cache.TryGetValue(tableName, out DataTable table))
+            {
+                Console.WriteLine($"Data for table {tableName}:");
+                Log.Information($"Data for table {tableName}:");
+                PrintDataTable(table);
+            }
+            else
+            {
+                Console.WriteLine($"No data found in cache for table {tableName}.");
+                Log.Information($"No data found in cache for table {tableName}.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Prints the data of a DataTable to the console and logs it.
+    /// </summary>
+    /// <param name="table">The DataTable to print.</param>
+    private void PrintDataTable(DataTable table)
+    {
+        // Create a string to accumulate the data for logging and console output
+        StringBuilder dataBuilder = new StringBuilder();
+        dataBuilder.AppendLine(String.Join("\t", table.Columns.Cast<DataColumn>().Select(c => c.ColumnName)));
+
+        foreach (DataRow row in table.Rows)
+        {
+            dataBuilder.AppendLine(String.Join("\t", row.ItemArray));
+        }
+
+        // Output to console and log file
+        Console.WriteLine(dataBuilder.ToString());
+        Log.Information(dataBuilder.ToString());
+    }
+
 }
 
 
