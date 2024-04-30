@@ -18,6 +18,10 @@ namespace SummitSQL
             _connectionString = connectionString;
         }
 
+        /// <summary>
+        /// Retrieves a list of all tables within the Access database.
+        /// </summary>
+        /// <returns>A DataTable containing information on all tables.</returns>
         public DataTable GetAccessTables()
         {
             using (var connection = new OleDbConnection(_connectionString))
@@ -27,6 +31,11 @@ namespace SummitSQL
             }
         }
 
+        /// <summary>
+        /// Retrieves column information for a specific table in the Access database.
+        /// </summary>
+        /// <param name="tableName">The name of the table to retrieve columns for.</param>
+        /// <returns>A DataTable containing column information.</returns>
         public DataTable GetTableColumns(string tableName)
         {
             using (var connection = new OleDbConnection(_connectionString))
@@ -49,15 +58,36 @@ namespace SummitSQL
             _sqlConnectionString = sqlConnectionString;
         }
 
+        /// <summary>
+        /// Ensures that a table exists in the SQL Server database. It sanitizes the table name
+        /// by replacing spaces with hyphens and handles SQL execution errors.
+        /// </summary>
+        /// <param name="columns">DataTable containing the schema for the table columns.</param>
+        /// <param name="tableName">The original name of the table as retrieved from Access.</param>
         public void CreateTable(DataTable columns, string tableName)
         {
             string sanitizedTableName = SanitizeTableName(tableName);
-            string createTableQuery = BuildCreateTableQuery(columns, sanitizedTableName);
+            StringBuilder createTableQuery = new StringBuilder($"CREATE TABLE [{sanitizedTableName}] (");
+
+            foreach (DataRow column in columns.Rows)
+            {
+                string columnName = column["COLUMN_NAME"].ToString();
+                string accessDataType = column["DATA_TYPE"].ToString();
+                int? characterMaxLength = column.Table.Columns.Contains("CHARACTER_MAXIMUM_LENGTH") && column["CHARACTER_MAXIMUM_LENGTH"] != DBNull.Value
+                                            ? Convert.ToInt32(column["CHARACTER_MAXIMUM_LENGTH"])
+                                            : null;
+
+                string sqlDataType = ConvertToSqlDataType(accessDataType, characterMaxLength);
+                createTableQuery.Append($"[{columnName}] {sqlDataType}, ");
+            }
+
+            createTableQuery.Length -= 2; // Remove the trailing comma and space
+            createTableQuery.Append(")");
 
             using (var connection = new SqlConnection(_sqlConnectionString))
             {
                 connection.Open();
-                using (var command = new SqlCommand(createTableQuery, connection))
+                using (var command = new SqlCommand(createTableQuery.ToString(), connection))
                 {
                     try
                     {
@@ -77,55 +107,22 @@ namespace SummitSQL
             return tableName.Replace(" ", "-");
         }
 
-        private string BuildCreateTableQuery(DataTable columns, string sanitizedTableName)
+        private string ConvertToSqlDataType(string accessDataType, int? characterMaxLength)
         {
-            StringBuilder createTableQuery = new StringBuilder($"CREATE TABLE [{sanitizedTableName}] (");
-
-            foreach (DataRow column in columns.Rows)
-            {
-                string columnName = column["COLUMN_NAME"].ToString();
-                string sqlDataType = ConvertToSqlDataType(column["DATA_TYPE"].ToString(), column["CHARACTER_MAXIMUM_LENGTH"]);
-                createTableQuery.Append($"[{columnName}] {sqlDataType}, ");
-            }
-
-            createTableQuery.Length -= 2;  // Remove the trailing comma and space
-            createTableQuery.Append(")");
-            return createTableQuery.ToString();
-        }
-
-        private string ConvertToSqlDataType(string accessDataType, object maxLength)
-        {
-            int length = maxLength != DBNull.Value ? Convert.ToInt32(maxLength) : -1;
-
             switch (accessDataType)
             {
                 case "DBTYPE_I4":
-                case "DBTYPE_I2":
+                case "Long Integer":
                     return "INT";
-                case "DBTYPE_DBDATE":
-                case "DBTYPE_DBTIMESTAMP":
-                    return "DATETIME";
-                case "DBTYPE_R8":
+                case "DBTYPE_R8": // Double in Access
                     return "FLOAT";
-                case "DBTYPE_BOOL":
-                    return "BIT";
-                case "DBTYPE_GUID":
-                    return "UNIQUEIDENTIFIER";
-                case "DBTYPE_BYTES":
-                    return "VARBINARY(MAX)";
+                case "Text":
+                    return characterMaxLength.HasValue && characterMaxLength > 0 ? $"NVARCHAR({characterMaxLength.Value})" : "NVARCHAR(255)";
+                case "Memo":
+                    return "NVARCHAR(MAX)";
                 default:
-                    // Ensure that length is not zero or negative, which is invalid in SQL Server for types that require length specifications.
-                    if (length <= 0)
-                    {
-                        // Defaulting to a sensible length or using MAX for unspecified or invalid lengths
-                        return "NVARCHAR(MAX)";
-                    }
-                    else
-                    {
-                        return $"NVARCHAR({length})";
-                    }
+                    return "NVARCHAR(MAX)"; // Default fallback for all other types
             }
         }
-
     }
 }

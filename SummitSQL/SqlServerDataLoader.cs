@@ -123,8 +123,7 @@ public class SqlServerDataLoader
     {
         Log.Information("Start Verify");
 
-        DataTable cachedData;
-        if (_cache.TryGetValue(tableName, out cachedData))
+        if (_cache.TryGetValue(tableName, out DataTable cachedData))
         {
             using (var connection = new SqlConnection(_sqlConnectionString))
             {
@@ -137,34 +136,34 @@ public class SqlServerDataLoader
                 if (sqlData.Rows.Count != cachedData.Rows.Count)
                 {
                     Console.WriteLine($"Data mismatch for {tableName}: Row counts differ.");
-                    Log.Information($"Data mismatch for {tableName}: SQL Server rows {sqlData.Rows.Count}, Cached rows {cachedData.Rows.Count}.");
                     return;
                 }
 
                 for (int i = 0; i < sqlData.Rows.Count; i++)
                 {
-                    for (int j = 0; j < sqlData.Columns.Count; j++)
+                    foreach (DataColumn column in sqlData.Columns)
                     {
-                        var sqlValue = Convert.ToString(sqlData.Rows[i][j]).Trim();
-                        var cachedValue = Convert.ToString(cachedData.Rows[i][j]).Trim();
-                        if (!string.Equals(sqlValue, cachedValue, StringComparison.Ordinal))
+                        object sqlValue = sqlData.Rows[i][column.ColumnName];
+                        object cachedValue = cachedData.Rows[i][column.ColumnName];
+
+                        // Convert both values to a common format if necessary, here assuming string comparison for simplicity
+                        if (!Convert.ToString(sqlValue).Equals(Convert.ToString(cachedValue)))
                         {
-                            Console.WriteLine($"Data mismatch in {tableName} at row {i + 1} column {sqlData.Columns[j].ColumnName}, SQL Server value: '{sqlValue}', Cached value: '{cachedValue}'.");
-                            Log.Information($"Data mismatch in {tableName} at row {i + 1}, column {sqlData.Columns[j].ColumnName}, SQL Server value: '{sqlValue}', Cached value: '{cachedValue}'.");
+                            Console.WriteLine($"Data mismatch in {tableName} at row {i + 1}, column {column.ColumnName}, SQL Server value: '{sqlValue}', Cached value: '{cachedValue}'.");
                             return;
                         }
                     }
                 }
 
                 Console.WriteLine($"Data for {tableName} is consistent between SQL Server and cache.");
-                Log.Information($"Data for {tableName} is consistent between SQL Server and cache.");
             }
         }
         else
         {
             Console.WriteLine($"No cached data found for {tableName}.");
-            Log.Information($"No cached data found for {tableName}.");
         }
     }
+
+
 
 }

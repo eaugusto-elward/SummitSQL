@@ -153,9 +153,12 @@ public class AccessDataLoader
     /// </summary>
     public void PrintCachedData()
     {
+        // Commented out varaible below is used for specific debugging purposes
+        // Comment out the foreach and use the variable to print a specific table from cache
         foreach (var tableName in _tableNames)
         {
-            if (_cache.TryGetValue(tableName, out DataTable table))
+        // var tableName = "tblPrinters";
+        if (_cache.TryGetValue(tableName, out DataTable table))
             {
                 Console.WriteLine($"Data for table {tableName}:");
                 Log.Information($"Data for table {tableName}:");

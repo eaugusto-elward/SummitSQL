@@ -83,12 +83,16 @@ class Program
                 case "5":
                     Console.WriteLine("Loading Access Database into memory...");
                     accessLoader.LoadAllTablesIntoMemory();
+                    Console.ForegroundColor = ConsoleColor.Green;
                     Console.WriteLine("Access Database loaded into memory successfully.");
+                    Console.ResetColor();
                     break;
                 case "6":
                     Console.WriteLine("Copying data to SQL Server...");
                     sqlLoader.TransferDataToSqlServer();
+                    Console.ForegroundColor = ConsoleColor.Green;
                     Console.WriteLine("Data copied to SQL Server successfully.");
+                    Console.ResetColor();
                     break;
                 case "7":
                     Console.WriteLine("Starting data synchronization...");
@@ -107,12 +111,12 @@ class Program
                     accessLoader.PrintCachedData();
                     break;
                 case "11":
-                    Log.Information("Case11");
-
                     sqlLoader.VerifyDataConsistency(verifyTableName);
                     break;
                 default:
+                    Console.ForegroundColor = ConsoleColor.Red;
                     Console.WriteLine("Invalid option, please try again.");
+                    Console.ResetColor();
                     break;
             }
         }
@@ -124,11 +128,15 @@ class Program
         {
             syncActive = true;
             syncTask = Task.Run(() => ContinuousDataCheck(accessLoader, sqlLoader, tableNames, cache));
+            Console.ForegroundColor = ConsoleColor.Green;
             Console.WriteLine("Data synchronization started.");
+            Console.ResetColor();
         }
         else
         {
+            Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine("Data synchronization is already running.");
+            Console.ResetColor();
         }
     }
 
@@ -138,11 +146,15 @@ class Program
         {
             syncActive = false;
             syncTask?.Wait(); // Safely wait for the task to complete
+            Console.ForegroundColor = ConsoleColor.Green;
             Console.WriteLine("Data synchronization stopped.");
+            Console.ResetColor();
         }
         else
         {
+            Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine("Data synchronization is not active.");
+            Console.ResetColor();
         }
     }
 
@@ -199,7 +211,9 @@ class Program
                 }
                 catch (Exception ex)
                 {
+                    Console.ForegroundColor = ConsoleColor.Red;
                     Console.WriteLine($"Error connecting to {dbType}: {ex.Message}");
+                    Console.ResetColor();
                 }
             }
         }
@@ -217,13 +231,17 @@ class Program
                 }
                 catch (Exception ex)
                 {
+                    Console.ForegroundColor = ConsoleColor.Red;
                     Console.WriteLine($"Error connecting to {dbType}: {ex.Message}");
+                    Console.ResetColor();
                 }
             }
         }
         else
         {
+            Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine($"Unsupported database type: {dbType}");
+            Console.ResetColor();
         }
     }
 
@@ -259,11 +277,15 @@ class Program
             try
             {
                 command.ExecuteNonQuery();
+                Console.ForegroundColor = ConsoleColor.Green;
                 Console.WriteLine("All tables dropped successfully.");
+                Console.ResetColor();
             }
             catch (Exception ex)
             {
+                Console.ForegroundColor = ConsoleColor.Red;
                 Console.WriteLine($"Error dropping tables: {ex.Message}");
+                Console.ResetColor();
             }
         }
     }
@@ -280,6 +302,8 @@ class Program
                 sqlSchemaManager.CreateTable(columns, tableName);
             }
         }
+        Console.ForegroundColor = ConsoleColor.Green;
         Console.WriteLine("Database migration complete.");
+        Console.ResetColor();
     }
 }
