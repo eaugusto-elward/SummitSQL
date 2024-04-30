@@ -1,8 +1,10 @@
 ﻿using Microsoft.Extensions.Caching.Memory;
 using System.Collections.Generic;
+using Serilog;
 
 /// <summary>
-/// Core controller for managing data operations from Access to SQL Server.
+/// Core controller for managing data operations from an Access database to a SQL Server database.
+/// This class orchestrates the loading of data from Access into memory and then transferring that data to SQL Server.
 /// </summary>
 public class Core
 {
@@ -13,7 +15,7 @@ public class Core
     /// Initializes a new instance of the Core class with specified services.
     /// </summary>
     /// <param name="accessConnectionString">Access database connection string.</param>
-    /// <param name="sqlConnectionString">SQL Server connection string.</param>
+    /// <param name="sqlConnectionString">SQL Server database connection string.</param>
     /// <param name="cache">Memory cache to store Access data temporarily.</param>
     /// <param name="tableNames">List to track table names for synchronization.</param>
     public Core(string accessConnectionString, string sqlConnectionString, IMemoryCache cache, List<string> tableNames)
@@ -24,10 +26,13 @@ public class Core
 
     /// <summary>
     /// Executes the full data loading from Access and transferring to SQL Server.
+    /// This method is designed to be called to perform the entire process of data migration from Access to SQL Server.
     /// </summary>
     public void ExecuteDataOperations()
     {
+        Log.Information("Starting full data load and transfer operations.");
         _accessLoader.LoadAllTablesIntoMemory();
         _sqlLoader.TransferDataToSqlServer();
+        Log.Information("Data operations completed.");
     }
 }

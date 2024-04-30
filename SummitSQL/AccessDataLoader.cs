@@ -8,6 +8,7 @@ using System.Text;
 
 /// <summary>
 /// Responsible for loading data from an Access database into memory.
+/// This class handles connections to the Access database, reads data from tables, and caches the data for further processing.
 /// </summary>
 public class AccessDataLoader
 {
@@ -30,26 +31,31 @@ public class AccessDataLoader
 
     /// <summary>
     /// Loads all tables from the Access database into memory.
+    /// This method retrieves the schema of the database, iterates over the tables, and loads each one into the cache.
     /// </summary>
     public void LoadAllTablesIntoMemory()
     {
-        Log.Information("Loading Tables Into Memory");
+        Log.Information("Loading all tables from Access database into memory.");
         using (var connection = new OleDbConnection(_connectionString))
         {
             connection.Open();
             var schemaTable = connection.GetOleDbSchemaTable(OleDbSchemaGuid.Tables, new object[] { null, null, null, "TABLE" });
+
             foreach (DataRow row in schemaTable.Rows)
             {
                 var tableName = row["TABLE_NAME"].ToString();
-                LoadTableData(connection, tableName);
+                if (!tableName.StartsWith("MSys"))  // Excludes system tables which start with 'MSys'
+                {
+                    LoadTableData(connection, tableName);
+                }
             }
         }
     }
 
     /// <summary>
-    /// Loads data from a specific table into the cache.
+    /// Loads data from a specified table into the cache.
     /// </summary>
-    /// <param name="connection">Active OleDbConnection.</param>
+    /// <param name="connection">Active OleDbConnection to use for querying.</param>
     /// <param name="tableName">Name of the table to load data from.</param>
     private void LoadTableData(OleDbConnection connection, string tableName)
     {
@@ -60,34 +66,47 @@ public class AccessDataLoader
             adapter.Fill(table);
             _cache.Set(SanitizeTableName(tableName), table, new MemoryCacheEntryOptions
             {
-                SlidingExpiration = TimeSpan.FromHours(1)
+                SlidingExpiration = TimeSpan.FromHours(1)  // Sets cache expiration to 1 hour
             });
-            Console.WriteLine($"Loaded and cached {table.Rows.Count} rows from {SanitizeTableName(tableName)}.");
             _tableNames.Add(SanitizeTableName(tableName));
+            Log.Information($"Loaded {table.Rows.Count} rows from {tableName} into cache.");
         }
     }
 
     /// <summary>
-    /// Sanitizes the table name to replace spaces with hyphens.
+    /// Sanitizes the table name to ensure it can be safely used in SQL queries and as cache keys.
     /// </summary>
     /// <param name="tableName">The original table name.</param>
-    /// <returns>A sanitized table name suitable for use in SQL queries.</returns>
+    /// <returns>A sanitized table name suitable for use in SQL queries and caching.</returns>
     private string SanitizeTableName(string tableName)
     {
-        return tableName.Replace(" ", "-");
+        var sanitized = tableName.Replace(" ", "-");
+        Log.Information($"Sanitized table name from '{tableName}' to '{sanitized}'.");
+        return sanitized;
     }
 
+    /// <summary>
+    /// Checks and updates a specific table in memory if the data has changed.
+    /// </summary>
+    /// <param name="tableName">Name of the table to check and update.</param>
+    /// <returns>True if the table was updated, false otherwise.</returns>
     public bool CheckAndUpdateTable(string tableName)
     {
         var newData = LoadTableDataDirectly(tableName);
         if (!_cache.TryGetValue(tableName, out DataTable currentData) || !TablesMatch(currentData, newData, tableName))
         {
             _cache.Set(tableName, newData);
+            Log.Information($"Table {tableName} updated in cache.");
             return true;
         }
         return false;
     }
 
+    /// <summary>
+    /// Loads data directly from the Access database for a specific table.
+    /// </summary>
+    /// <param name="tableName">Name of the table to load data from.</param>
+    /// <returns>A DataTable containing the data from the specified table.</returns>
     private DataTable LoadTableDataDirectly(string tableName)
     {
         using (var connection = new OleDbConnection(_connectionString))
@@ -102,53 +121,6 @@ public class AccessDataLoader
     }
 
     /// <summary>
-    /// Compares two DataTables to determine if they are identical.
-    /// </summary>
-    /// <param name="dt1">First DataTable to compare.</param>
-    /// <param name="dt2">Second DataTable to compare.</param>
-    /// <param name="tableName">The name of the table being compared.</param>
-    /// <returns>True if the tables match; otherwise, false.</returns>
-    private bool TablesMatch(DataTable sqlData, DataTable cachedData, string tableName)
-    {
-        Log.Information("Begin Table Matching");
-
-        if (sqlData.Rows.Count != cachedData.Rows.Count)
-        {
-            Log.Information("Row count mismatch in {TableName}: SQL Server has {SqlRowCount} rows, Cache has {CacheRowCount} rows",
-                            tableName, sqlData.Rows.Count, cachedData.Rows.Count);
-            return false;
-        }
-
-        for (int i = 0; i < sqlData.Rows.Count; i++)
-        {
-            for (int j = 0; j < sqlData.Columns.Count; j++)
-            {
-                if (!Equals(sqlData.Rows[i][j], cachedData.Rows[i][j]))
-                {
-                    Log.Information("Data mismatch in {TableName} at row {Row}, column {Column}: SQL Server='{SqlValue}', Cache='{CacheValue}'",
-                                    tableName, i + 1, sqlData.Columns[j].ColumnName, sqlData.Rows[i][j], cachedData.Rows[i][j]);
-                    return false;
-                }
-            }
-        }
-        return true; // If all rows and columns match, return true
-    }
-
-    /// <summary>
-    /// Logs a change detected in a table column.
-    /// </summary>
-    /// <param name="tableName">Table where the change occurred.</param>
-    /// <param name="timestamp">Timestamp of the change.</param>
-    /// <param name="columnName">Column that changed.</param>
-    /// <param name="oldValue">Old value of the column.</param>
-    /// <param name="newValue">New value of the column.</param>
-    private void LogChange(string tableName, DateTime timestamp, string columnName, object oldValue, object newValue)
-    {
-        Log.Information("Change detected in table {TableName} at {Timestamp}: Column {ColumnName} changed from {OldValue} to {NewValue}",
-                        tableName, timestamp, columnName, oldValue, newValue);
-    }
-
-    /// <summary>
     /// Prints the cached data for all loaded tables.
     /// </summary>
     public void PrintCachedData()
@@ -157,8 +129,8 @@ public class AccessDataLoader
         // Comment out the foreach and use the variable to print a specific table from cache
         foreach (var tableName in _tableNames)
         {
-        // var tableName = "tblPrinters";
-        if (_cache.TryGetValue(tableName, out DataTable table))
+            // var tableName = "tblPrinters";
+            if (_cache.TryGetValue(tableName, out DataTable table))
             {
                 Console.WriteLine($"Data for table {tableName}:");
                 Log.Information($"Data for table {tableName}:");
@@ -192,6 +164,32 @@ public class AccessDataLoader
         Log.Information(dataBuilder.ToString());
     }
 
+    /// <summary>
+    /// Compares two DataTables to determine if they match exactly, row by row and column by column.
+    /// </summary>
+    /// <param name="dt1">The first DataTable.</param>
+    /// <param name="dt2">The second DataTable.</param>
+    /// <param name="tableName">Name of the table being compared for logging purposes.</param>
+    /// <returns>True if the tables match; otherwise, false.</returns>
+    private bool TablesMatch(DataTable dt1, DataTable dt2, string tableName)
+    {
+        if (dt1.Rows.Count != dt2.Rows.Count)
+        {
+            Log.Information($"Mismatch in row count for {tableName}: {dt1.Rows.Count} vs {dt2.Rows.Count}");
+            return false;
+        }
+
+        for (int i = 0; i < dt1.Rows.Count; i++)
+        {
+            for (int j = 0; j < dt1.Columns.Count; j++)
+            {
+                if (!Equals(dt1.Rows[i][j], dt2.Rows[i][j]))
+                {
+                    Log.Information($"Data mismatch in {tableName} at row {i + 1}, column {dt1.Columns[j].ColumnName}: '{dt1.Rows[i][j]}' vs '{dt2.Rows[i][j]}'");
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
 }
-
-

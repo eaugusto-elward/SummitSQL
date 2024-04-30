@@ -7,6 +7,7 @@ using Serilog;
 
 /// <summary>
 /// Responsible for transferring data from memory into a SQL Server database.
+/// This class manages the connection to SQL Server and facilitates the bulk insertion of data from the in-memory cache.
 /// </summary>
 public class SqlServerDataLoader
 {
@@ -32,6 +33,7 @@ public class SqlServerDataLoader
     /// </summary>
     public void TransferDataToSqlServer()
     {
+        Log.Information("Starting data transfer to SQL Server.");
         foreach (var tableName in _tableNames)
         {
             if (_cache.TryGetValue(tableName, out DataTable dataTable))
@@ -43,6 +45,7 @@ public class SqlServerDataLoader
 
     /// <summary>
     /// Performs a bulk insert of data into a specific table in SQL Server.
+    /// This method is designed to efficiently transfer large volumes of data.
     /// </summary>
     /// <param name="dataTable">Data table containing the data to insert.</param>
     /// <param name="tableName">The name of the destination table in SQL Server.</param>
@@ -53,13 +56,12 @@ public class SqlServerDataLoader
             connection.Open();
             using (var transaction = connection.BeginTransaction())
             {
-                using (var bulkCopy = new SqlBulkCopy(connection, SqlBulkCopyOptions.Default, transaction))
+                try
                 {
-                    bulkCopy.DestinationTableName = $"[{tableName}]";
-                    bulkCopy.BatchSize = 1000;
-
-                    try
+                    using (var bulkCopy = new SqlBulkCopy(connection, SqlBulkCopyOptions.Default, transaction))
                     {
+                        bulkCopy.DestinationTableName = $"[{tableName}]";
+                        bulkCopy.BatchSize = 1000;
                         foreach (DataColumn column in dataTable.Columns)
                         {
                             bulkCopy.ColumnMappings.Add(column.ColumnName, column.ColumnName);
@@ -67,23 +69,27 @@ public class SqlServerDataLoader
 
                         bulkCopy.WriteToServer(dataTable);
                         transaction.Commit();
-                        Console.WriteLine($"Successfully transferred data to {tableName}");
+                        Log.Information($"Successfully transferred data to {tableName}.");
                     }
-                    catch (Exception ex)
-                    {
-                        transaction.Rollback();
-                        Console.WriteLine($"Error transferring data to {tableName}: {ex.Message}");
-                        Log.Error($"Data transfer to {tableName} failed. Error: {ex.Message}");
-                        LogDetailedError(dataTable, ex);
-                    }
+                }
+                catch (Exception ex)
+                {
+                    transaction.Rollback();
+                    Console.WriteLine($"Error transferring data to {tableName}: {ex.Message}");
+                    Log.Error($"Data transfer to {tableName} failed. Error: {ex.Message}");
+                    LogDetailedError(dataTable, ex);
                 }
             }
         }
     }
 
+    /// <summary>
+    /// Logs detailed information about an error during data transfer.
+    /// </summary>
+    /// <param name="dataTable">The data table that was being processed when the error occurred.</param>
+    /// <param name="ex">The exception that was thrown.</param>
     private void LogDetailedError(DataTable dataTable, Exception ex)
     {
-        // Log specific row data to help diagnose the issue
         foreach (DataRow row in dataTable.Rows)
         {
             var rowValues = row.ItemArray.Select(r => r.ToString()).ToArray();
@@ -91,38 +97,42 @@ public class SqlServerDataLoader
         }
     }
 
-
-
     /// <summary>
     /// Updates SQL Server with the latest data for a specific table.
+    /// This method clears existing data and inserts updated data to maintain data integrity.
     /// </summary>
     /// <param name="tableName">Name of the table in SQL Server.</param>
     /// <param name="dataTable">Data table containing the updated data.</param>
     public void UpdateSqlServer(string tableName, DataTable dataTable)
     {
+        Log.Information($"Updating data for {tableName} in SQL Server.");
         try
         {
-            // Clear existing data
             using (var connection = new SqlConnection(_sqlConnectionString))
             {
                 connection.Open();
-                var command = new SqlCommand($"DELETE FROM [{tableName}]", connection);
-                command.ExecuteNonQuery();
-            }
+                using (var command = new SqlCommand($"DELETE FROM [{tableName}]", connection))
+                {
+                    command.ExecuteNonQuery();
+                }
 
-            // Insert updated data
-            BulkInsert(dataTable, tableName);
+                BulkInsert(dataTable, tableName);
+            }
         }
         catch (Exception ex)
         {
             Console.WriteLine($"Error updating data in SQL Server for table {tableName}: {ex.Message}");
+            Log.Error($"Error updating data in SQL Server for table {tableName}: {ex.Message}");
         }
     }
 
+    /// <summary>
+    /// Verifies the data consistency between the SQL Server database and the cached data.
+    /// </summary>
+    /// <param name="tableName">Name of the table to verify.</param>
     public void VerifyDataConsistency(string tableName)
     {
-        Log.Information("Start Verify");
-
+        Log.Information($"Starting data consistency verification for {tableName}.");
         if (_cache.TryGetValue(tableName, out DataTable cachedData))
         {
             using (var connection = new SqlConnection(_sqlConnectionString))
@@ -146,7 +156,6 @@ public class SqlServerDataLoader
                         object sqlValue = sqlData.Rows[i][column.ColumnName];
                         object cachedValue = cachedData.Rows[i][column.ColumnName];
 
-                        // Convert both values to a common format if necessary, here assuming string comparison for simplicity
                         if (!Convert.ToString(sqlValue).Equals(Convert.ToString(cachedValue)))
                         {
                             Console.WriteLine($"Data mismatch in {tableName} at row {i + 1}, column {column.ColumnName}, SQL Server value: '{sqlValue}', Cached value: '{cachedValue}'.");
@@ -163,7 +172,4 @@ public class SqlServerDataLoader
             Console.WriteLine($"No cached data found for {tableName}.");
         }
     }
-
-
-
 }

@@ -11,40 +11,43 @@ using System.Threading.Tasks;
 
 class Program
 {
-    static bool syncActive = false; // Flag to control the sync process
-    static Task syncTask; // Task to run the synchronization process
-    static string verifyTableName = "tblPrinters"; // Table to verify data consistency
+    static bool syncActive = false; // Flag to control the synchronization process
+    static Task syncTask; // Task to run the data synchronization process
+    static string verifyTableName = "tblPrinters"; // Default table to verify data consistency
 
     static void Main(string[] args)
     {
+        // Configure the logger with file output and set the minimum log level to Debug
         Log.Logger = new LoggerConfiguration()
             .MinimumLevel.Debug()
-            //.WriteTo.Console()
             .WriteTo.File("C:\\Users\\eaugusto\\Desktop\\Logs\\dataSyncLog.txt", rollingInterval: RollingInterval.Day)
             .CreateLogger();
 
-        // Setup Dependency Injection
+        // Set up dependency injection for memory caching
         var serviceProvider = new ServiceCollection()
             .AddMemoryCache()
             .BuildServiceProvider();
 
+        // Retrieve the memory cache instance from the service provider
         var cache = serviceProvider.GetService<IMemoryCache>();
-        var tableNames = new List<string>();  // List to keep track of table names loaded into memory
+        var tableNames = new List<string>();  // List to keep track of loaded table names
 
-        // Define connection strings for databases
+        // Define connection strings for Access and SQL Server databases
         var accessConnectionString = "Provider=Microsoft.ACE.OLEDB.12.0;Data Source=C:\\Users\\eaugusto\\Desktop\\SummitBE_local.accdb;";
         var sqlConnectionString = "Server=.\\summitlocal;Database=summitlocal;User Id=sa;Password=CTK1420!@;";
 
-        // Declare and instantiate schema managers here
+        // Instantiate schema managers for both databases
         var accessSchemaManager = new AccessDatabaseSchemaManager(accessConnectionString);
         var sqlSchemaManager = new SqlServerSchemaManager(sqlConnectionString);
 
+        // Create data loaders for both databases
         var accessLoader = new AccessDataLoader(accessConnectionString, cache, tableNames);
         var sqlLoader = new SqlServerDataLoader(sqlConnectionString, cache, tableNames);
 
         bool running = true;
         Log.Information("Starting application");
 
+        // Main loop for user interaction
         while (running)
         {
             Console.WriteLine("\nMain Menu:");
@@ -122,6 +125,13 @@ class Program
         }
     }
 
+    /// <summary>
+    /// Starts the data synchronization process if it's not already running.
+    /// </summary>
+    /// <param name="accessLoader">Data loader for the Access database.</param>
+    /// <param name="sqlLoader">Data loader for the SQL Server.</param>
+    /// <param name="tableNames">List of table names to be synchronized.</param>
+    /// <param name="cache">Cache service instance.</param>
     static void StartDataSync(AccessDataLoader accessLoader, SqlServerDataLoader sqlLoader, List<string> tableNames, IMemoryCache cache)
     {
         if (!syncActive)
@@ -140,6 +150,9 @@ class Program
         }
     }
 
+    /// <summary>
+    /// Stops the data synchronization process safely.
+    /// </summary>
     static void StopDataSync()
     {
         if (syncActive)
@@ -158,6 +171,14 @@ class Program
         }
     }
 
+    /// <summary>
+    /// Continuously checks data for updates and synchronizes changes.
+    /// </summary>
+    /// <param name="accessLoader">Data loader for the Access database.</param>
+    /// <param name="sqlLoader">Data loader for the SQL Server.</param>
+    /// <param name="tableNames">List of table names to check.</param>
+    /// <param name="cache">Cache service instance.</param>
+    /// <returns></returns>
     static async Task ContinuousDataCheck(AccessDataLoader accessLoader, SqlServerDataLoader sqlLoader, List<string> tableNames, IMemoryCache cache)
     {
         Process secondConsole = new Process
@@ -195,6 +216,11 @@ class Program
         secondConsole.WaitForExit();
     }
 
+    /// <summary>
+    /// Tests the connection to the specified database type and logs the result.
+    /// </summary>
+    /// <param name="connectionString">Connection string for the database.</param>
+    /// <param name="dbType">Type of the database (Access or SQL Server).</param>
     static void TestConnection(string connectionString, string dbType)
     {
         if (dbType == "Access")
@@ -245,6 +271,10 @@ class Program
         }
     }
 
+    /// <summary>
+    /// Drops all user tables from the SQL Server database.
+    /// </summary>
+    /// <param name="connectionString">SQL Server database connection string.</param>
     static void DropAllTables(string connectionString)
     {
         string query = @"
@@ -290,6 +320,11 @@ class Program
         }
     }
 
+    /// <summary>
+    /// Migrates database schema from Access to SQL Server.
+    /// </summary>
+    /// <param name="accessSchemaManager">Schema manager for Access database.</param>
+    /// <param name="sqlSchemaManager">Schema manager for SQL Server.</param>
     static void MigrateDatabase(AccessDatabaseSchemaManager accessSchemaManager, SqlServerSchemaManager sqlSchemaManager)
     {
         DataTable accessTables = accessSchemaManager.GetAccessTables();

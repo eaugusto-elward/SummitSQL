@@ -3,16 +3,21 @@ using System.Data;
 using System.Data.OleDb;
 using System.Data.SqlClient;
 using System.Text;
+using Serilog;
 
 namespace SummitSQL
 {
     /// <summary>
-    /// Handles schema operations for an Access database.
+    /// Handles schema operations for an Access database, retrieving information about tables and their columns.
     /// </summary>
     public class AccessDatabaseSchemaManager
     {
         private readonly string _connectionString;
 
+        /// <summary>
+        /// Initializes a new instance of the AccessDatabaseSchemaManager with a specific connection string.
+        /// </summary>
+        /// <param name="connectionString">The connection string to the Access database.</param>
         public AccessDatabaseSchemaManager(string connectionString)
         {
             _connectionString = connectionString;
@@ -47,20 +52,23 @@ namespace SummitSQL
     }
 
     /// <summary>
-    /// Manages database schema operations for SQL Server.
+    /// Manages database schema operations for SQL Server, ensuring that tables are created and updated based on Access database schemas.
     /// </summary>
     public class SqlServerSchemaManager
     {
         private readonly string _sqlConnectionString;
 
+        /// <summary>
+        /// Initializes a new instance of the SqlServerSchemaManager with a specific SQL Server connection string.
+        /// </summary>
+        /// <param name="sqlConnectionString">The connection string to the SQL Server database.</param>
         public SqlServerSchemaManager(string sqlConnectionString)
         {
             _sqlConnectionString = sqlConnectionString;
         }
 
         /// <summary>
-        /// Ensures that a table exists in the SQL Server database. It sanitizes the table name
-        /// by replacing spaces with hyphens and handles SQL execution errors.
+        /// Creates a table in SQL Server based on the schema defined in an Access database table.
         /// </summary>
         /// <param name="columns">DataTable containing the schema for the table columns.</param>
         /// <param name="tableName">The original name of the table as retrieved from Access.</param>
@@ -92,21 +100,33 @@ namespace SummitSQL
                     try
                     {
                         command.ExecuteNonQuery();
-                        Console.WriteLine($"Table '{sanitizedTableName}' created in SQL Server.");
+                        Log.Information($"Table '{sanitizedTableName}' created in SQL Server.");
                     }
                     catch (SqlException ex)
                     {
+                        Log.Error($"Failed to create table '{sanitizedTableName}': {ex.Message}");
                         Console.WriteLine($"Failed to create table '{sanitizedTableName}': {ex.Message}");
                     }
                 }
             }
         }
 
+        /// <summary>
+        /// Sanitizes the table name to be compliant with SQL Server naming conventions.
+        /// </summary>
+        /// <param name="tableName">The original table name.</param>
+        /// <returns>A sanitized table name suitable for SQL Server.</returns>
         private string SanitizeTableName(string tableName)
         {
             return tableName.Replace(" ", "-");
         }
 
+        /// <summary>
+        /// Converts Access data types to SQL Server data types to ensure compatibility.
+        /// </summary>
+        /// <param name="accessDataType">Access data type as a string.</param>
+        /// <param name="characterMaxLength">Maximum length of characters for string data types, if applicable.</param>
+        /// <returns>SQL Server data type as a string.</returns>
         private string ConvertToSqlDataType(string accessDataType, int? characterMaxLength)
         {
             switch (accessDataType)
