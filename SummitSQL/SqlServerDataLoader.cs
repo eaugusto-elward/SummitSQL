@@ -53,25 +53,45 @@ public class SqlServerDataLoader
             connection.Open();
             using (var transaction = connection.BeginTransaction())
             {
-                try
+                using (var bulkCopy = new SqlBulkCopy(connection, SqlBulkCopyOptions.Default, transaction))
                 {
-                    using (var bulkCopy = new SqlBulkCopy(connection, SqlBulkCopyOptions.Default, transaction))
+                    bulkCopy.DestinationTableName = $"[{tableName}]";
+                    bulkCopy.BatchSize = 1000;
+
+                    try
                     {
-                        bulkCopy.DestinationTableName = $"[{tableName}]";
-                        bulkCopy.BatchSize = 1000;
+                        foreach (DataColumn column in dataTable.Columns)
+                        {
+                            bulkCopy.ColumnMappings.Add(column.ColumnName, column.ColumnName);
+                        }
+
                         bulkCopy.WriteToServer(dataTable);
                         transaction.Commit();
                         Console.WriteLine($"Successfully transferred data to {tableName}");
                     }
-                }
-                catch (Exception ex)
-                {
-                    transaction.Rollback();
-                    Console.WriteLine($"Error transferring data to {tableName}: {ex.Message}");
+                    catch (Exception ex)
+                    {
+                        transaction.Rollback();
+                        Console.WriteLine($"Error transferring data to {tableName}: {ex.Message}");
+                        Log.Error($"Data transfer to {tableName} failed. Error: {ex.Message}");
+                        LogDetailedError(dataTable, ex);
+                    }
                 }
             }
         }
     }
+
+    private void LogDetailedError(DataTable dataTable, Exception ex)
+    {
+        // Log specific row data to help diagnose the issue
+        foreach (DataRow row in dataTable.Rows)
+        {
+            var rowValues = row.ItemArray.Select(r => r.ToString()).ToArray();
+            Log.Information($"Problematic row data: {string.Join(", ", rowValues)}");
+        }
+    }
+
+
 
     /// <summary>
     /// Updates SQL Server with the latest data for a specific table.

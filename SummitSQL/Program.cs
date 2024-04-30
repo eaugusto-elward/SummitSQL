@@ -193,7 +193,9 @@ class Program
                 try
                 {
                     connection.Open();
+                    Console.ForegroundColor = ConsoleColor.Green;
                     Console.WriteLine($"{dbType} connection successful.");
+                    Console.ResetColor();
                 }
                 catch (Exception ex)
                 {
@@ -209,7 +211,9 @@ class Program
                 try
                 {
                     connection.Open();
+                    Console.ForegroundColor = ConsoleColor.Green;
                     Console.WriteLine($"{dbType} connection successful.");
+                    Console.ResetColor();
                 }
                 catch (Exception ex)
                 {
