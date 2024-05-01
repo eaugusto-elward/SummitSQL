@@ -64,9 +64,14 @@ public class AccessDataLoader
         {
             var table = new DataTable();
             adapter.Fill(table);
-            _cache.Set(SanitizeTableName(tableName), table, new MemoryCacheEntryOptions
+            _cache.Set(SanitizeTableName(tableName, true), table, new MemoryCacheEntryOptions
             {
-                SlidingExpiration = TimeSpan.FromHours(1)  // Sets cache expiration to 1 hour
+                Priority = CacheItemPriority.High,  // Sets cache priority to high
+                // TODO: Implement cache expiration policy
+                // TODO: Implement cache refresh policy
+                // I think I want to clear the cache every night, shut down the script, and then reload the cache in the morning
+
+                SlidingExpiration = TimeSpan.FromHours(17)  // Sets cache expiration to 17 hours. 5am-10pm
             });
             _tableNames.Add(SanitizeTableName(tableName));
             Log.Information($"Loaded {table.Rows.Count} rows from {tableName} into cache.");
@@ -77,13 +82,18 @@ public class AccessDataLoader
     /// Sanitizes the table name to ensure it can be safely used in SQL queries and as cache keys.
     /// </summary>
     /// <param name="tableName">The original table name.</param>
+    /// <param name="log">Whether to log the sanitization process.</param>
     /// <returns>A sanitized table name suitable for use in SQL queries and caching.</returns>
-    private string SanitizeTableName(string tableName)
+    private string SanitizeTableName(string tableName, bool log = false)
     {
         var sanitized = tableName.Replace(" ", "-");
-        Log.Information($"Sanitized table name from '{tableName}' to '{sanitized}'.");
+        if (log)
+        {
+            Log.Information($"Sanitized table name from '{tableName}' to '{sanitized}'.");
+        }
         return sanitized;
     }
+
 
     /// <summary>
     /// Checks and updates a specific table in memory if the data has changed.

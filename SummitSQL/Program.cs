@@ -14,6 +14,7 @@ class Program
     static bool syncActive = false; // Flag to control the synchronization process
     static Task syncTask; // Task to run the data synchronization process
     static string verifyTableName = "tblPrinters"; // Default table to verify data consistency
+    static CancellationTokenSource cancellationTokenSource = new CancellationTokenSource();
 
     static void Main(string[] args)
     {
@@ -67,39 +68,68 @@ class Program
             string option = Console.ReadLine();
             switch (option)
             {
+                // Early case string responses are nested within the test functions of that class.
+                // This is because this program was several separate CLI applications combined into one.
+                // TODO: Refactor for clarity and consistency.
                 case "1":
+                    Log.Information("Connecting to Access Database...");
                     Console.WriteLine("Connecting to Access Database...");
                     TestConnection(accessConnectionString, "Access");
                     break;
                 case "2":
+                    Log.Information("Connecting to SQL Server Database...");
                     Console.WriteLine("Connecting to SQL Server Database...");
                     TestConnection(sqlConnectionString, "SQL Server");
                     break;
                 case "3":
+                    Log.Information("Dropping all user tables...");
                     Console.WriteLine("Dropping all user tables...");
                     DropAllTables(sqlConnectionString);
+
+                    // TODO: Add verification step to ensure tables were dropped successfully
                     break;
                 case "4":
+                    Log.Information("Migrating Database...");
                     Console.WriteLine("Migrating Database...");
                     MigrateDatabase(accessSchemaManager, sqlSchemaManager);
+
+                    // TODO: Add verification step to ensure data was copied successfully
                     break;
                 case "5":
+
+                    Log.Information("Loading Access Database into memory...");
                     Console.WriteLine("Loading Access Database into memory...");
                     accessLoader.LoadAllTablesIntoMemory();
                     Console.ForegroundColor = ConsoleColor.Green;
+
+                    // TODO: Add verification step to ensure data was copied successfully
                     Console.WriteLine("Access Database loaded into memory successfully.");
                     Console.ResetColor();
+                    Log.Information("Access Database loaded into memory successfully.");
                     break;
                 case "6":
+                    Log.Information("Copying data to SQL Server...");
                     Console.WriteLine("Copying data to SQL Server...");
                     sqlLoader.TransferDataToSqlServer();
                     Console.ForegroundColor = ConsoleColor.Green;
+
+                    // TODO: Add verification step to ensure data was copied successfully
                     Console.WriteLine("Data copied to SQL Server successfully.");
                     Console.ResetColor();
+                    Log.Information("Data copied to SQL Server successfully.");
                     break;
                 case "7":
-                    Console.WriteLine("Starting data synchronization...");
-                    StartDataSync(accessLoader, sqlLoader, tableNames, cache);
+                    if (!syncActive)
+                    {
+                        Console.WriteLine("Starting data synchronization...");
+                        StartDataSync(accessLoader, sqlLoader, tableNames, cache);
+                    }
+                    else
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine("Data synchronization is already running.");
+                        Console.ResetColor();
+                    }
                     break;
                 case "8":
                     Console.WriteLine("Stopping data synchronization...");
@@ -117,6 +147,7 @@ class Program
                     sqlLoader.VerifyDataConsistency(verifyTableName);
                     break;
                 default:
+                    Log.Error("Invalid option selected.");
                     Console.ForegroundColor = ConsoleColor.Red;
                     Console.WriteLine("Invalid option, please try again.");
                     Console.ResetColor();
@@ -137,38 +168,37 @@ class Program
         if (!syncActive)
         {
             syncActive = true;
-            syncTask = Task.Run(() => ContinuousDataCheck(accessLoader, sqlLoader, tableNames, cache));
+            cancellationTokenSource = new CancellationTokenSource();
+            syncTask = Task.Run(() => ContinuousDataCheck(accessLoader, sqlLoader, tableNames, cache, cancellationTokenSource.Token));
             Console.ForegroundColor = ConsoleColor.Green;
             Console.WriteLine("Data synchronization started.");
             Console.ResetColor();
+            Log.Information("Data synchronization started.");
         }
         else
         {
             Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine("Data synchronization is already running.");
             Console.ResetColor();
+            Log.Warning("Data synchronization is already running.");
         }
     }
+
 
     /// <summary>
     /// Stops the data synchronization process safely.
     /// </summary>
     static void StopDataSync()
     {
-        if (syncActive)
-        {
-            syncActive = false;
-            syncTask?.Wait(); // Safely wait for the task to complete
-            Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine("Data synchronization stopped.");
-            Console.ResetColor();
-        }
-        else
-        {
-            Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine("Data synchronization is not active.");
-            Console.ResetColor();
-        }
+        if (!syncActive) return; // Sync is not active, do nothing
+        cancellationTokenSource.Cancel();
+        syncActive = false;
+
+        Log.Information("Data synchronization stopped.");
+        Console.ForegroundColor = ConsoleColor.Green;
+        Console.WriteLine("Data synchronization stopped.");
+        Console.ResetColor();
+
     }
 
     /// <summary>
@@ -178,43 +208,51 @@ class Program
     /// <param name="sqlLoader">Data loader for the SQL Server.</param>
     /// <param name="tableNames">List of table names to check.</param>
     /// <param name="cache">Cache service instance.</param>
-    /// <returns></returns>
-    static async Task ContinuousDataCheck(AccessDataLoader accessLoader, SqlServerDataLoader sqlLoader, List<string> tableNames, IMemoryCache cache)
+    /// <param name="cancellationToken">Cancellation token to handle stopping the task gracefully.</param>
+    static async Task ContinuousDataCheck(AccessDataLoader accessLoader, SqlServerDataLoader sqlLoader, List<string> tableNames, IMemoryCache cache, CancellationToken cancellationToken)
     {
-        Process secondConsole = new Process
+        while (!cancellationToken.IsCancellationRequested)
         {
-            StartInfo = new ProcessStartInfo("cmd.exe")
+            foreach (var tableName in tableNames)
             {
-                RedirectStandardInput = true,
-                UseShellExecute = false
-            }
-        };
-        secondConsole.Start();
-        using (StreamWriter sw = secondConsole.StandardInput)
-        {
-            if (sw.BaseStream.CanWrite)
-            {
-                while (syncActive)
+                try
                 {
-                    foreach (var tableName in tableNames)
+                    // Log the beginning of a check cycle for a table
+                    Log.Information($"Checking updates for {tableName}");
+
+                    // Attempt to check and update the table, log the result
+                    bool updated = accessLoader.CheckAndUpdateTable(tableName);
+                    string status = updated ? "Updated" : "No Change";
+                    Log.Information($"Check completed for {tableName}: {status}");
+
+                    // If an update was detected, proceed to update SQL Server
+                    if (updated)
                     {
-                        bool updated = accessLoader.CheckAndUpdateTable(tableName);
-                        string status = updated ? "Updated" : "No Change";
-                        sw.WriteLine($"Check completed for {tableName}: {status}");
-                        if (updated)
+                        if (cache.TryGetValue(tableName, out DataTable updatedTable))
                         {
-                            if (cache.TryGetValue(tableName, out DataTable updatedTable))
-                            {
-                                sqlLoader.UpdateSqlServer(tableName, updatedTable);
-                            }
+                            Log.Information($"Updating SQL Server with changes for {tableName}");
+                            sqlLoader.UpdateSqlServer(tableName, updatedTable);
+                            Log.Information($"SQL Server updated successfully for {tableName}");
                         }
-                        await Task.Delay(5000); // Check every 5 seconds
+                        else
+                        {
+                            Log.Warning($"Failed to retrieve updated data for {tableName} from cache.");
+                        }
                     }
                 }
+                catch (Exception ex)
+                {
+                    Log.Error($"Error processing table table {tableName}: {ex.Message}");
+                }
+                // Delay between checks to reduce load on resources
+                await Task.Delay(5000, cancellationToken);
             }
         }
-        secondConsole.WaitForExit();
+
+        Log.Information("Data synchronization task has been stopped by exiting logic loop.");
     }
+
+
 
     /// <summary>
     /// Tests the connection to the specified database type and logs the result.
@@ -231,12 +269,14 @@ class Program
                 try
                 {
                     connection.Open();
+                    Log.Information($"{dbType} connection successful.");
                     Console.ForegroundColor = ConsoleColor.Green;
                     Console.WriteLine($"{dbType} connection successful.");
                     Console.ResetColor();
                 }
                 catch (Exception ex)
                 {
+                    Log.Error($"Error connecting to {dbType}: {ex.Message}");
                     Console.ForegroundColor = ConsoleColor.Red;
                     Console.WriteLine($"Error connecting to {dbType}: {ex.Message}");
                     Console.ResetColor();
@@ -251,12 +291,14 @@ class Program
                 try
                 {
                     connection.Open();
+                    Log.Information($"{dbType} connection successful.");
                     Console.ForegroundColor = ConsoleColor.Green;
                     Console.WriteLine($"{dbType} connection successful.");
                     Console.ResetColor();
                 }
                 catch (Exception ex)
                 {
+                    Log.Error($"Error connecting to {dbType}: {ex.Message}");
                     Console.ForegroundColor = ConsoleColor.Red;
                     Console.WriteLine($"Error connecting to {dbType}: {ex.Message}");
                     Console.ResetColor();
@@ -265,6 +307,7 @@ class Program
         }
         else
         {
+            Log.Error($"Unsupported database type: {dbType}");
             Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine($"Unsupported database type: {dbType}");
             Console.ResetColor();
@@ -307,12 +350,14 @@ class Program
             try
             {
                 command.ExecuteNonQuery();
+                Log.Information("All tables dropped successfully.");
                 Console.ForegroundColor = ConsoleColor.Green;
                 Console.WriteLine("All tables dropped successfully.");
                 Console.ResetColor();
             }
             catch (Exception ex)
             {
+                Log.Error($"Error dropping tables: {ex.Message}");
                 Console.ForegroundColor = ConsoleColor.Red;
                 Console.WriteLine($"Error dropping tables: {ex.Message}");
                 Console.ResetColor();
@@ -337,6 +382,7 @@ class Program
                 sqlSchemaManager.CreateTable(columns, tableName);
             }
         }
+        Log.Information("Database migration complete.");
         Console.ForegroundColor = ConsoleColor.Green;
         Console.WriteLine("Database migration complete.");
         Console.ResetColor();
