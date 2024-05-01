@@ -15,6 +15,8 @@ class Program
     static Task syncTask; // Task to run the data synchronization process
     static string verifyTableName = "tblPrinters"; // Default table to verify data consistency
     static CancellationTokenSource cancellationTokenSource = new CancellationTokenSource();
+    static IMemoryCache cache = new MemoryCache(new MemoryCacheOptions());
+    static IMemoryCache volatileCache = new MemoryCache(new MemoryCacheOptions());
 
     static void Main(string[] args)
     {
@@ -24,14 +26,19 @@ class Program
             .WriteTo.File("C:\\Users\\eaugusto\\Desktop\\Logs\\dataSyncLog.txt", rollingInterval: RollingInterval.Day)
             .CreateLogger();
 
-        // Set up dependency injection for memory caching
-        var serviceProvider = new ServiceCollection()
-            .AddMemoryCache()
-            .BuildServiceProvider();
+        // REMOVED SERVICE PROVIDER. SWITCHED TO FACTORY STYLE CREATION
+        //// Set up dependency injection for memory caching
+        //var serviceProvider = new ServiceCollection()
+        //    .AddMemoryCache()   // Add primary memory cache service
+        //    .BuildServiceProvider();
+        //// Retrieve the memory cache instance from the service provider
+        //var cache = serviceProvider.GetService<IMemoryCache>();
+        //// Create a separate cache for volatile data. Use the second instance to avoid conflicts.
+        //var volatilecache = serviceProvider.GetService<IMemoryCache>();
 
-        // Retrieve the memory cache instance from the service provider
-        var cache = serviceProvider.GetService<IMemoryCache>();
+
         var tableNames = new List<string>();  // List to keep track of loaded table names
+
 
         // Define connection strings for Access and SQL Server databases
         var accessConnectionString = "Provider=Microsoft.ACE.OLEDB.12.0;Data Source=C:\\Users\\eaugusto\\Desktop\\SummitBE_local.accdb;";
@@ -122,7 +129,7 @@ class Program
                     if (!syncActive)
                     {
                         Console.WriteLine("Starting data synchronization...");
-                        StartDataSync(accessLoader, sqlLoader, tableNames, cache);
+                        StartDataSync(accessLoader, sqlLoader, tableNames, cache, volatileCache);
                     }
                     else
                     {
@@ -163,13 +170,13 @@ class Program
     /// <param name="sqlLoader">Data loader for the SQL Server.</param>
     /// <param name="tableNames">List of table names to be synchronized.</param>
     /// <param name="cache">Cache service instance.</param>
-    static void StartDataSync(AccessDataLoader accessLoader, SqlServerDataLoader sqlLoader, List<string> tableNames, IMemoryCache cache)
+    static void StartDataSync(AccessDataLoader accessLoader, SqlServerDataLoader sqlLoader, List<string> tableNames, IMemoryCache cache, IMemoryCache volatileCache)
     {
         if (!syncActive)
         {
             syncActive = true;
             cancellationTokenSource = new CancellationTokenSource();
-            syncTask = Task.Run(() => ContinuousDataCheck(accessLoader, sqlLoader, tableNames, cache, cancellationTokenSource.Token));
+            syncTask = Task.Run(() => ContinuousDataCheck(accessLoader, sqlLoader, cache, volatileCache, cancellationTokenSource.Token));
             Console.ForegroundColor = ConsoleColor.Green;
             Console.WriteLine("Data synchronization started.");
             Console.ResetColor();
@@ -202,54 +209,52 @@ class Program
     }
 
     /// <summary>
-    /// Continuously checks data for updates and synchronizes changes.
+    /// Continuously checks data for updates and synchronizes changes using two caches.
     /// </summary>
     /// <param name="accessLoader">Data loader for the Access database.</param>
     /// <param name="sqlLoader">Data loader for the SQL Server.</param>
     /// <param name="tableNames">List of table names to check.</param>
-    /// <param name="cache">Cache service instance.</param>
+    /// <param name="primaryCache">Cache service instance for persistent data.</param>
+    /// <param name="volatileCache">Cache for holding the most recent data from Access.</param>
     /// <param name="cancellationToken">Cancellation token to handle stopping the task gracefully.</param>
-    static async Task ContinuousDataCheck(AccessDataLoader accessLoader, SqlServerDataLoader sqlLoader, List<string> tableNames, IMemoryCache cache, CancellationToken cancellationToken)
+    static async Task ContinuousDataCheck(AccessDataLoader accessLoader, SqlServerDataLoader sqlLoader, IMemoryCache primaryCache, IMemoryCache volatileCache, CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
         {
-            foreach (var tableName in tableNames)
+            foreach (var entry in accessLoader.TableNames)
             {
+                var originalName = entry.Key;
+                var sanitized = entry.Value;
+
                 try
                 {
-                    // Log the beginning of a check cycle for a table
-                    Log.Information($"Checking updates for {tableName}");
+                    Log.Information($"Checking updates for {originalName}");
+                    DataTable recentData = accessLoader.LoadTableDataDirectly(originalName);
+                    volatileCache.Set(sanitized, recentData, new MemoryCacheEntryOptions { SlidingExpiration = TimeSpan.FromMinutes(5) });
 
-                    // Attempt to check and update the table, log the result
-                    bool updated = accessLoader.CheckAndUpdateTable(tableName);
-                    string status = updated ? "Updated" : "No Change";
-                    Log.Information($"Check completed for {tableName}: {status}");
-
-                    // If an update was detected, proceed to update SQL Server
-                    if (updated)
+                    if (primaryCache.TryGetValue(sanitized, out DataTable primaryData))
                     {
-                        if (cache.TryGetValue(tableName, out DataTable updatedTable))
+                        if (!accessLoader.TablesMatch(primaryData, recentData))
                         {
-                            Log.Information($"Updating SQL Server with changes for {tableName}");
-                            sqlLoader.UpdateSqlServer(tableName, updatedTable);
-                            Log.Information($"SQL Server updated successfully for {tableName}");
-                        }
-                        else
-                        {
-                            Log.Warning($"Failed to retrieve updated data for {tableName} from cache.");
+                            Log.Information($"Data mismatch found for {sanitized}, updating SQL Server.");
+                            sqlLoader.UpdateSqlServer(sanitized, recentData);
+                            primaryCache.Set(sanitized, recentData);
                         }
                     }
+                    else
+                    {
+                        // Log that the table was correctly compared between the two caches and no changes were found
+                        primaryCache.Set(sanitized, recentData);
+                        Log.Information($"Data for {sanitized} is up to date.");
+                    }
+                    await Task.Delay(5000, cancellationToken); // Consider making the delay configurable
                 }
                 catch (Exception ex)
                 {
-                    Log.Error($"Error processing table table {tableName}: {ex.Message}");
+                    Log.Error($"Error processing table {originalName}: {ex.Message}");
                 }
-                // Delay between checks to reduce load on resources
-                await Task.Delay(5000, cancellationToken);
             }
         }
-
-        Log.Information("Data synchronization task has been stopped by exiting logic loop.");
     }
 
 
