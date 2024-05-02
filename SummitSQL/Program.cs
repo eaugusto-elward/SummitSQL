@@ -11,47 +11,37 @@ using System.Threading.Tasks;
 
 class Program
 {
-    static bool syncActive = false; // Flag to control the synchronization process
-    static Task syncTask; // Task to run the data synchronization process
-    static string verifyTableName = "tblPrinters"; // Default table to verify data consistency
-    static CancellationTokenSource cancellationTokenSource = new CancellationTokenSource();
-    static IMemoryCache cache = new MemoryCache(new MemoryCacheOptions());
-    static IMemoryCache volatileCache = new MemoryCache(new MemoryCacheOptions());
+    static bool syncActive = false; // Flag to check if data synchronization is currently active
+    static Task? syncTask;  // Task that runs the data synchronization process
+    static string verifyTableName = "tblPrinters";  // Default table name used to verify data consistency between databases
+    static CancellationTokenSource cancellationTokenSource = new CancellationTokenSource(); // Source of cancellation tokens that can be used to stop the synchronization process
+    static IMemoryCache cache = new MemoryCache(new MemoryCacheOptions());  // Cache for storing persistent data
+    static IMemoryCache volatileCache = new MemoryCache(new MemoryCacheOptions());  // Cache for storing volatile data that updates frequently
 
     static void Main(string[] args)
     {
-        // Configure the logger with file output and set the minimum log level to Debug
+        // Initialize and configure the logger
         Log.Logger = new LoggerConfiguration()
             .MinimumLevel.Debug()
             .WriteTo.File("C:\\Users\\eaugusto\\Desktop\\Logs\\dataSyncLog.txt", rollingInterval: RollingInterval.Day)
             .CreateLogger();
 
-        // REMOVED SERVICE PROVIDER. SWITCHED TO FACTORY STYLE CREATION
-        //// Set up dependency injection for memory caching
-        //var serviceProvider = new ServiceCollection()
-        //    .AddMemoryCache()   // Add primary memory cache service
-        //    .BuildServiceProvider();
-        //// Retrieve the memory cache instance from the service provider
-        //var cache = serviceProvider.GetService<IMemoryCache>();
-        //// Create a separate cache for volatile data. Use the second instance to avoid conflicts.
-        //var volatilecache = serviceProvider.GetService<IMemoryCache>();
+        // List of table names to keep track of those that have been loaded into memory
+        var tableNames = new List<string>();
 
-
-        var tableNames = new List<string>();  // List to keep track of loaded table names
-
-
-        // Define connection strings for Access and SQL Server databases
+        // Connection strings for the Access and SQL Server databases
         var accessConnectionString = "Provider=Microsoft.ACE.OLEDB.12.0;Data Source=C:\\Users\\eaugusto\\Desktop\\SummitBE_local.accdb;";
         var sqlConnectionString = "Server=.\\summitlocal;Database=summitlocal;User Id=sa;Password=CTK1420!@;";
 
-        // Instantiate schema managers for both databases
+        // Schema managers for both Access and SQL Server databases to manage database schemas
         var accessSchemaManager = new AccessDatabaseSchemaManager(accessConnectionString);
         var sqlSchemaManager = new SqlServerSchemaManager(sqlConnectionString);
 
-        // Create data loaders for both databases
+        // Data loaders for loading data from Access and SQL Server databases into memory
         var accessLoader = new AccessDataLoader(accessConnectionString, cache, tableNames);
         var sqlLoader = new SqlServerDataLoader(sqlConnectionString, cache, tableNames);
 
+        // Flag to control the main loop of the program
         bool running = true;
         Log.Information("Starting application");
 
@@ -70,14 +60,12 @@ class Program
             Console.WriteLine("9 - Exit");
             Console.WriteLine("10 - Print Cached Data");
             Console.WriteLine("11 - Verify Data Consistency between Access & SQL");
+            Console.WriteLine("12 - Clear Cache");
             Console.Write("Enter option: ");
 
-            string option = Console.ReadLine();
+            string? option = Console.ReadLine();
             switch (option)
             {
-                // Early case string responses are nested within the test functions of that class.
-                // This is because this program was several separate CLI applications combined into one.
-                // TODO: Refactor for clarity and consistency.
                 case "1":
                     Log.Information("Connecting to Access Database...");
                     Console.WriteLine("Connecting to Access Database...");
@@ -92,24 +80,17 @@ class Program
                     Log.Information("Dropping all user tables...");
                     Console.WriteLine("Dropping all user tables...");
                     DropAllTables(sqlConnectionString);
-
-                    // TODO: Add verification step to ensure tables were dropped successfully
                     break;
                 case "4":
                     Log.Information("Migrating Database...");
                     Console.WriteLine("Migrating Database...");
                     MigrateDatabase(accessSchemaManager, sqlSchemaManager);
-
-                    // TODO: Add verification step to ensure data was copied successfully
                     break;
                 case "5":
-
                     Log.Information("Loading Access Database into memory...");
                     Console.WriteLine("Loading Access Database into memory...");
                     accessLoader.LoadAllTablesIntoMemory();
                     Console.ForegroundColor = ConsoleColor.Green;
-
-                    // TODO: Add verification step to ensure data was copied successfully
                     Console.WriteLine("Access Database loaded into memory successfully.");
                     Console.ResetColor();
                     Log.Information("Access Database loaded into memory successfully.");
@@ -119,8 +100,6 @@ class Program
                     Console.WriteLine("Copying data to SQL Server...");
                     sqlLoader.TransferDataToSqlServer();
                     Console.ForegroundColor = ConsoleColor.Green;
-
-                    // TODO: Add verification step to ensure data was copied successfully
                     Console.WriteLine("Data copied to SQL Server successfully.");
                     Console.ResetColor();
                     Log.Information("Data copied to SQL Server successfully.");
@@ -146,12 +125,16 @@ class Program
                     running = false;
                     StopDataSync(); // Ensure sync is stopped before exiting
                     Console.WriteLine("Exiting program.");
+                    ClearCache(cache, volatileCache);
                     break;
                 case "10":
                     accessLoader.PrintCachedData();
                     break;
                 case "11":
                     sqlLoader.VerifyDataConsistency(verifyTableName);
+                    break;
+                case "12":
+                    ClearCache(cache, volatileCache);
                     break;
                 default:
                     Log.Error("Invalid option selected.");
@@ -170,6 +153,7 @@ class Program
     /// <param name="sqlLoader">Data loader for the SQL Server.</param>
     /// <param name="tableNames">List of table names to be synchronized.</param>
     /// <param name="cache">Cache service instance.</param>
+    /// <param name="volatileCache">Cache for holding the most recent data from Access.</param>
     static void StartDataSync(AccessDataLoader accessLoader, SqlServerDataLoader sqlLoader, List<string> tableNames, IMemoryCache cache, IMemoryCache volatileCache)
     {
         if (!syncActive)
@@ -191,7 +175,6 @@ class Program
         }
     }
 
-
     /// <summary>
     /// Stops the data synchronization process safely.
     /// </summary>
@@ -200,12 +183,10 @@ class Program
         if (!syncActive) return; // Sync is not active, do nothing
         cancellationTokenSource.Cancel();
         syncActive = false;
-
         Log.Information("Data synchronization stopped.");
         Console.ForegroundColor = ConsoleColor.Green;
         Console.WriteLine("Data synchronization stopped.");
         Console.ResetColor();
-
     }
 
     /// <summary>
@@ -232,13 +213,16 @@ class Program
                     DataTable recentData = accessLoader.LoadTableDataDirectly(originalName);
                     volatileCache.Set(sanitized, recentData, new MemoryCacheEntryOptions { SlidingExpiration = TimeSpan.FromMinutes(5) });
 
-                    if (primaryCache.TryGetValue(sanitized, out DataTable primaryData))
+                    if (primaryCache.TryGetValue(sanitized, out DataTable? primaryData))
                     {
-                        if (!accessLoader.TablesMatch(primaryData, recentData))
+                        if (primaryData != null && recentData != null)
                         {
-                            Log.Information($"Data mismatch found for {sanitized}, updating SQL Server.");
-                            sqlLoader.UpdateSqlServer(sanitized, recentData);
-                            primaryCache.Set(sanitized, recentData);
+                            if (!accessLoader.TablesMatch(primaryData, recentData))
+                            {
+                                Log.Information($"Data mismatch found for {sanitized}, updating SQL Server.");
+                                sqlLoader.UpdateSqlServer(sanitized, recentData);
+                                primaryCache.Set(sanitized, recentData);
+                            }
                         }
                     }
                     else
@@ -257,7 +241,21 @@ class Program
         }
     }
 
-
+    /// <summary>
+    /// Clears all data stored the primary and secondary caches.
+    /// </summary>
+    /// <param name="primaryCache">Primary memory cache to be cleared.</param>
+    /// <param name="volatileCache">Volatile memory cache to be cleared.</param>
+    static void ClearCache(IMemoryCache primaryCache, IMemoryCache volatileCache)
+    {
+        if (cache is MemoryCache memCache && volatileCache is MemoryCache volatileMemCache)
+        {
+            memCache.Compact(1.0); // This effectively clears the cache
+            volatileMemCache.Compact(1.0);
+            Log.Information("Cache has been cleared.");
+            Console.WriteLine("Cache cleared.");
+        }
+    }
 
     /// <summary>
     /// Tests the connection to the specified database type and logs the result.
@@ -266,55 +264,65 @@ class Program
     /// <param name="dbType">Type of the database (Access or SQL Server).</param>
     static void TestConnection(string connectionString, string dbType)
     {
-        if (dbType == "Access")
+        try
         {
-            // Use OleDbConnection for Access Database
-            using (var connection = new System.Data.OleDb.OleDbConnection(connectionString))
+            if (dbType == "Access" && OperatingSystem.IsWindows())
             {
-                try
+                // Use OleDbConnection for Access Database
+                using (var connection = new System.Data.OleDb.OleDbConnection(connectionString))
                 {
-                    connection.Open();
-                    Log.Information($"{dbType} connection successful.");
-                    Console.ForegroundColor = ConsoleColor.Green;
-                    Console.WriteLine($"{dbType} connection successful.");
-                    Console.ResetColor();
-                }
-                catch (Exception ex)
-                {
-                    Log.Error($"Error connecting to {dbType}: {ex.Message}");
-                    Console.ForegroundColor = ConsoleColor.Red;
-                    Console.WriteLine($"Error connecting to {dbType}: {ex.Message}");
-                    Console.ResetColor();
+                    try
+                    {
+                        connection.Open();
+                        Log.Information($"{dbType} connection successful.");
+                        Console.ForegroundColor = ConsoleColor.Green;
+                        Console.WriteLine($"{dbType} connection successful.");
+                        Console.ResetColor();
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error($"Error connecting to {dbType}: {ex.Message}");
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"Error connecting to {dbType}: {ex.Message}");
+                        Console.ResetColor();
+                    }
                 }
             }
-        }
-        else if (dbType == "SQL Server")
-        {
-            // Use SqlConnection for SQL Server Database
-            using (var connection = new System.Data.SqlClient.SqlConnection(connectionString))
+            else if (dbType == "SQL Server")
             {
-                try
+                // Use SqlConnection for SQL Server Database
+                using (var connection = new System.Data.SqlClient.SqlConnection(connectionString))
                 {
-                    connection.Open();
-                    Log.Information($"{dbType} connection successful.");
-                    Console.ForegroundColor = ConsoleColor.Green;
-                    Console.WriteLine($"{dbType} connection successful.");
-                    Console.ResetColor();
-                }
-                catch (Exception ex)
-                {
-                    Log.Error($"Error connecting to {dbType}: {ex.Message}");
-                    Console.ForegroundColor = ConsoleColor.Red;
-                    Console.WriteLine($"Error connecting to {dbType}: {ex.Message}");
-                    Console.ResetColor();
+                    try
+                    {
+                        connection.Open();
+                        Log.Information($"{dbType} connection successful.");
+                        Console.ForegroundColor = ConsoleColor.Green;
+                        Console.WriteLine($"{dbType} connection successful.");
+                        Console.ResetColor();
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error($"Error connecting to {dbType}: {ex.Message}");
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"Error connecting to {dbType}: {ex.Message}");
+                        Console.ResetColor();
+                    }
                 }
             }
+            else
+            {
+                Log.Error($"Unsupported database type: {dbType}");
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine($"Unsupported database type: {dbType}");
+                Console.ResetColor();
+            }
         }
-        else
+        catch (Exception ex)
         {
-            Log.Error($"Unsupported database type: {dbType}");
+            Log.Error($"Error testing connection: {ex.Message}");
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"Unsupported database type: {dbType}");
+            Console.WriteLine($"Error testing connection: {ex.Message}");
             Console.ResetColor();
         }
     }
@@ -380,8 +388,8 @@ class Program
         DataTable accessTables = accessSchemaManager.GetAccessTables();
         foreach (DataRow table in accessTables.Rows)
         {
-            string tableName = table["TABLE_NAME"].ToString();
-            if (!tableName.StartsWith("MSys")) // Exclude system tables
+            string? tableName = table["TABLE_NAME"].ToString();
+            if (tableName != null && !tableName.StartsWith("MSys")) // Exclude system tables
             {
                 DataTable columns = accessSchemaManager.GetTableColumns(tableName);
                 sqlSchemaManager.CreateTable(columns, tableName);
