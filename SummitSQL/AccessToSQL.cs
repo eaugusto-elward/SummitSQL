@@ -29,10 +29,18 @@ namespace SummitSQL
         /// <returns>A DataTable containing information on all tables.</returns>
         public DataTable GetAccessTables()
         {
-            using (var connection = new OleDbConnection(_connectionString))
+            if (OperatingSystem.IsWindows())
             {
-                connection.Open();
-                return connection.GetSchema("Tables");
+                using (var connection = new OleDbConnection(_connectionString))
+                {
+                    connection.Open();
+                    return connection.GetSchema("Tables");
+                }
+            }
+            else
+            {
+                Log.Error("Access database schema operations are only supported on Windows.");
+                return null;
             }
         }
 

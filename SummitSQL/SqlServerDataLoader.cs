@@ -14,19 +14,20 @@ public class SqlServerDataLoader
 {
     private readonly string _sqlConnectionString;
     private readonly IMemoryCache _cache;
-    private readonly List<string> _tableNames;
+    //private readonly List<string> _tableNames;
+    public Dictionary<string, string> TableNames { get; private set; } // Expose table names
 
     /// <summary>
-    /// Initializes a new instance of the SqlServerDataLoader with necessary dependencies.
+    /// Initializes a new instance of the SqlServerDataLoader with specified services.
     /// </summary>
-    /// <param name="sqlConnectionString">Connection string for the SQL Server database.</param>
-    /// <param name="cache">Cache service to retrieve stored data.</param>
-    /// <param name="tableNames">List of table names that have been loaded into memory and need to be synchronized.</param>
-    public SqlServerDataLoader(string sqlConnectionString, IMemoryCache cache, List<string> tableNames)
+    /// <param name="sqlConnectionString">SQL Server connection string.</param>
+    /// <param name="cache">Memory cache to store SQL Server data temporarily.</param>
+    /// <param name="tableNames">Dictionary to track table names for synchronization.</param>
+    public SqlServerDataLoader(string sqlConnectionString, IMemoryCache cache, Dictionary<string, string> tableNames)
     {
         _sqlConnectionString = sqlConnectionString;
         _cache = cache;
-        _tableNames = tableNames;
+        TableNames = tableNames ?? new Dictionary<string, string>();
     }
 
     /// <summary>
@@ -35,24 +36,35 @@ public class SqlServerDataLoader
     public void TransferDataToSqlServer()
     {
         Log.Information("Starting data transfer to SQL Server.");
-        foreach (var tableName in _tableNames)
+        if (TableNames == null || TableNames.Count == 0)
         {
-            if (_cache.TryGetValue(tableName, out DataTable dataTable))
+            Log.Warning("No table names provided for data transfer. Skipping operation.");
+            return;
+        }
+
+        foreach (var tableName in TableNames)
+        {
+            string sanitizedTableName = tableName.Value;
+            if (_cache.TryGetValue(sanitizedTableName, out DataTable dataTable))
             {
                 if (dataTable == null || dataTable.Rows.Count == 0)
                 {
-                    Log.Warning($"No rows found in dataTable for {tableName}. Skipping bulk insert.");
+                    Log.Warning($"No rows found in dataTable for {sanitizedTableName}. Skipping bulk insert.");
                     continue;
                 }
 
-                Log.Information($"Proceeding with bulk insert for {tableName} with {dataTable.Rows.Count} rows.");
-                BulkInsert(dataTable, tableName);
+                Log.Information($"Proceeding with bulk insert for {sanitizedTableName} with {dataTable.Rows.Count} rows.");
+                BulkInsert(dataTable, sanitizedTableName);
             }
             else
             {
-                Log.Warning($"No dataTable found in cache for {tableName}. Skipping this table.");
+                Log.Warning($"No dataTable found in cache for {sanitizedTableName}. Skipping this table.");
             }
         }
+        Console.ForegroundColor = ConsoleColor.Green;
+        Console.WriteLine("Data copied to SQL Server successfully.");
+        Console.ResetColor();
+        Log.Information("Data copied to SQL Server successfully.");
     }
 
     /// <summary>
@@ -73,7 +85,7 @@ public class SqlServerDataLoader
                     using (var bulkCopy = new SqlBulkCopy(connection, SqlBulkCopyOptions.Default, transaction))
                     {
                         bulkCopy.DestinationTableName = $"[{tableName}]";
-                        bulkCopy.BatchSize = 1000;
+                        bulkCopy.BatchSize = 10000;
                         foreach (DataColumn column in dataTable.Columns)
                         {
                             bulkCopy.ColumnMappings.Add(column.ColumnName, column.ColumnName);
@@ -109,4 +121,81 @@ public class SqlServerDataLoader
             Log.Information($"Problematic row data: {string.Join(", ", rowValues)}");
         }
     }
+
+    /// <summary>
+    /// Updates SQL Server with the latest data for a specific table.
+    /// This method clears existing data and inserts updated data to maintain data integrity.
+    /// </summary>
+    /// <param name="tableName">Name of the table in SQL Server.</param>
+    /// <param name="dataTable">Data table containing the updated data.</param>
+    public void UpdateSqlServer(string tableName, DataTable dataTable)
+    {
+        Log.Information($"Updating data for {tableName} in SQL Server.");
+        try
+        {
+            using (var connection = new SqlConnection(_sqlConnectionString))
+            {
+                connection.Open();
+                using (var command = new SqlCommand($"DELETE FROM [{tableName}]", connection))
+                {
+                    command.ExecuteNonQuery();
+                }
+
+                BulkInsert(dataTable, tableName);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error updating data in SQL Server for table {tableName}: {ex.Message}");
+            Log.Error($"Error updating data in SQL Server for table {tableName}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Verifies the data consistency between the SQL Server database and the cached data.
+    /// </summary>
+    /// <param name="tableName">Name of the table to verify.</param>
+    public void VerifyDataConsistency(string tableName)
+    {
+        Log.Information($"Starting data consistency verification for {tableName}.");
+        if (_cache.TryGetValue(tableName, out DataTable cachedData))
+        {
+            using (var connection = new SqlConnection(_sqlConnectionString))
+            {
+                connection.Open();
+                var command = new SqlCommand($"SELECT * FROM [{tableName}]", connection);
+                var adapter = new SqlDataAdapter(command);
+                var sqlData = new DataTable();
+                adapter.Fill(sqlData);
+
+                if (sqlData.Rows.Count != cachedData.Rows.Count)
+                {
+                    Console.WriteLine($"Data mismatch for {tableName}: Row counts differ.");
+                    return;
+                }
+
+                for (int i = 0; i < sqlData.Rows.Count; i++)
+                {
+                    foreach (DataColumn column in sqlData.Columns)
+                    {
+                        object sqlValue = sqlData.Rows[i][column.ColumnName];
+                        object cachedValue = cachedData.Rows[i][column.ColumnName];
+
+                        if (!Convert.ToString(sqlValue).Equals(Convert.ToString(cachedValue)))
+                        {
+                            Console.WriteLine($"Data mismatch in {tableName} at row {i + 1}, column {column.ColumnName}, SQL Server value: '{sqlValue}', Cached value: '{cachedValue}'.");
+                            return;
+                        }
+                    }
+                }
+
+                Console.WriteLine($"Data for {tableName} is consistent between SQL Server and cache.");
+            }
+        }
+        else
+        {
+            Console.WriteLine($"No cached data found for {tableName}.");
+        }
+    }
+
 }

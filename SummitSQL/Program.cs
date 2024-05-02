@@ -8,12 +8,15 @@ using Serilog;
 using System.Diagnostics;
 using System.Text;
 using System.Threading.Tasks;
+using Quartz.Impl.AdoJobStore.Common;
+using static System.Runtime.InteropServices.JavaScript.JSType;
+using System.IO;
 
 class Program
 {
     static bool syncActive = false; // Flag to check if data synchronization is currently active
     static Task? syncTask;  // Task that runs the data synchronization process
-    static string verifyTableName = "tblPrinters";  // Default table name used to verify data consistency between databases
+    static string verifyTableName = "tblPerson";  // Default table name used to verify data consistency between databases
     static CancellationTokenSource cancellationTokenSource = new CancellationTokenSource(); // Source of cancellation tokens that can be used to stop the synchronization process
     static IMemoryCache cache = new MemoryCache(new MemoryCacheOptions());  // Cache for storing persistent data
     static IMemoryCache volatileCache = new MemoryCache(new MemoryCacheOptions());  // Cache for storing volatile data that updates frequently
@@ -30,16 +33,20 @@ class Program
         var tableNames = new List<string>();
 
         // Connection strings for the Access and SQL Server databases
-        var accessConnectionString = "Provider=Microsoft.ACE.OLEDB.12.0;Data Source=C:\\Users\\eaugusto\\Desktop\\SummitBE_local.accdb;";
+        var accessConnectionString = "Provider=Microsoft.ACE.OLEDB.12.0;Data Source=C:\\Users\\eaugusto\\Desktop\\SummitBE_local.accdb;Mode=Read";
+        //var accessConnectionStringReadOnly = "Provider=Microsoft.ACE.OLEDB.12.0;Data Source=C:\\Users\\eaugusto\\Desktop\\SummitBE_local.accdb;Mode = Read; ";
         var sqlConnectionString = "Server=.\\summitlocal;Database=summitlocal;User Id=sa;Password=CTK1420!@;";
 
         // Schema managers for both Access and SQL Server databases to manage database schemas
         var accessSchemaManager = new AccessDatabaseSchemaManager(accessConnectionString);
         var sqlSchemaManager = new SqlServerSchemaManager(sqlConnectionString);
 
-        // Data loaders for loading data from Access and SQL Server databases into memory
-        var accessLoader = new AccessDataLoader(accessConnectionString, cache, tableNames);
-        var sqlLoader = new SqlServerDataLoader(sqlConnectionString, cache, tableNames);
+        // Instantiate the AccessDataLoader
+        var accessLoader = new AccessDataLoader(accessConnectionString, cache);
+
+        // Now pass the TableNames from accessLoader to SqlServerDataLoader
+        var sqlLoader = new SqlServerDataLoader(sqlConnectionString, cache, accessLoader.TableNames);
+
 
         // Flag to control the main loop of the program
         bool running = true;
@@ -87,22 +94,17 @@ class Program
                     MigrateDatabase(accessSchemaManager, sqlSchemaManager);
                     break;
                 case "5":
+                    //accessLoader.ConnectionString = accessConnectionStringReadOnly;
                     Log.Information("Loading Access Database into memory...");
                     Console.WriteLine("Loading Access Database into memory...");
                     accessLoader.LoadAllTablesIntoMemory();
-                    Console.ForegroundColor = ConsoleColor.Green;
-                    Console.WriteLine("Access Database loaded into memory successfully.");
-                    Console.ResetColor();
-                    Log.Information("Access Database loaded into memory successfully.");
+                    //accessLoader.ConnectionString = accessConnectionString;
                     break;
                 case "6":
                     Log.Information("Copying data to SQL Server...");
                     Console.WriteLine("Copying data to SQL Server...");
                     sqlLoader.TransferDataToSqlServer();
-                    Console.ForegroundColor = ConsoleColor.Green;
-                    Console.WriteLine("Data copied to SQL Server successfully.");
-                    Console.ResetColor();
-                    Log.Information("Data copied to SQL Server successfully.");
+
                     break;
                 case "7":
                     if (!syncActive)
@@ -143,8 +145,11 @@ class Program
                     Console.ResetColor();
                     break;
             }
+
+
         }
     }
+
 
     /// <summary>
     /// Starts the data synchronization process if it's not already running.
@@ -219,6 +224,12 @@ class Program
                         {
                             if (!accessLoader.TablesMatch(primaryData, recentData))
                             {
+                                //var mismatches = accessLoader.FindMismatches(primaryData, recentData);
+                                //foreach (var mismatch in mismatches)
+                                //{
+                                //    Log.Information($"Mismatch at row {mismatch.RowIndex} in {sanitized}, column {mismatch.ColumnName}: Cached='{mismatch.OldValue}', New='{mismatch.NewValue}'");
+                                //}
+
                                 Log.Information($"Data mismatch found for {sanitized}, updating SQL Server.");
                                 sqlLoader.UpdateSqlServer(sanitized, recentData);
                                 primaryCache.Set(sanitized, recentData);
@@ -231,7 +242,8 @@ class Program
                         primaryCache.Set(sanitized, recentData);
                         Log.Information($"Data for {sanitized} is up to date.");
                     }
-                    await Task.Delay(5000, cancellationToken); // Consider making the delay configurable
+                    // Task delay used in place of event trigger, keeps async stack from growing too large and causing memory leak on exit
+                    await Task.Delay(1, cancellationToken); // Consider making the delay configurable
                 }
                 catch (Exception ex)
                 {

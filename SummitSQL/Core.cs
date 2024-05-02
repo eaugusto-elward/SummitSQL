@@ -10,6 +10,7 @@ public class Core
 {
     private AccessDataLoader _accessLoader;
     private SqlServerDataLoader _sqlLoader;
+    //private Dictionary<string, string> _tableNames; // Shared dictionary for table names
 
     /// <summary>
     /// Initializes a new instance of the Core class with specified services.
@@ -17,10 +18,10 @@ public class Core
     /// <param name="accessConnectionString">Access database connection string.</param>
     /// <param name="sqlConnectionString">SQL Server database connection string.</param>
     /// <param name="cache">Memory cache to store Access data temporarily.</param>
-    /// <param name="tableNames">List to track table names for synchronization.</param>
-    public Core(string accessConnectionString, string sqlConnectionString, IMemoryCache cache, List<string> tableNames)
+    public Core(string accessConnectionString, string sqlConnectionString, IMemoryCache cache)
     {
-        _accessLoader = new AccessDataLoader(accessConnectionString, cache, tableNames);
+        var tableNames = new Dictionary<string, string>(); // Shared dictionary
+        _accessLoader = new AccessDataLoader(accessConnectionString, cache);
         _sqlLoader = new SqlServerDataLoader(sqlConnectionString, cache, tableNames);
     }
 

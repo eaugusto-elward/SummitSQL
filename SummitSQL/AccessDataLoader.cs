@@ -12,9 +12,9 @@ using System.Text;
 /// </summary>
 public class AccessDataLoader
 {
-    private readonly string _connectionString;
+    private string _connectionString;
     private readonly IMemoryCache _cache;
-    private readonly List<string> _tableNames;
+    //private readonly List<string> _tableNames;
     public Dictionary<string, string> TableNames { get; private set; } // Expose table names
 
     /// <summary>
@@ -22,13 +22,11 @@ public class AccessDataLoader
     /// </summary>
     /// <param name="connectionString">The connection string to the Access database.</param>
     /// <param name="cache">The memory cache to store table data.</param>
-    /// <param name="tableNames">A list to track the names of loaded tables.</param>
-    public AccessDataLoader(string connectionString, IMemoryCache cache, List<string> tableNames)
+    public AccessDataLoader(string connectionString, IMemoryCache cache)
     {
         _connectionString = connectionString;
         _cache = cache;
-        _tableNames = tableNames;
-        TableNames = new Dictionary<string, string>();
+        TableNames = TableNames ?? new Dictionary<string, string>();
     }
 
     /// <summary>
@@ -37,22 +35,32 @@ public class AccessDataLoader
     public void LoadAllTablesIntoMemory()
     {
         Log.Information("Loading all tables from Access database into memory.");
-        using (var connection = new OleDbConnection(_connectionString))
-        {
-            connection.Open();
-            var schemaTable = connection.GetOleDbSchemaTable(OleDbSchemaGuid.Tables, new object[] { null, null, null, "TABLE" });
 
-            foreach (DataRow row in schemaTable.Rows)
+        if (OperatingSystem.IsWindows())
+        {
+            using (var connection = new OleDbConnection(_connectionString))
             {
-                var originalName = row["TABLE_NAME"].ToString();
-                if (!originalName.StartsWith("MSys"))
+                connection.Open();
+                var schemaTable = connection.GetOleDbSchemaTable(OleDbSchemaGuid.Tables, new object[] { null, null, null, "TABLE" });
+
+                foreach (DataRow row in schemaTable.Rows)
                 {
-                    var sanitized = SanitizeTableName(originalName);
-                    LoadTableData(connection, originalName, sanitized);
-                    TableNames.Add(originalName, sanitized);
+                    var originalName = row["TABLE_NAME"].ToString();
+                    if (!originalName.StartsWith("MSys"))
+                    {
+                        var sanitized = SanitizeTableName(originalName);
+                        LoadTableData(connection, originalName, sanitized);
+                        if (!TableNames.ContainsKey(originalName))
+                            TableNames.Add(originalName, sanitized);
+
+                    }
                 }
             }
         }
+        Console.ForegroundColor = ConsoleColor.Green;
+        Console.WriteLine("Access Database loaded into memory successfully.");
+        Console.ResetColor();
+        Log.Information("Access Database loaded into memory successfully.");
     }
 
     /// <summary>
@@ -64,17 +72,49 @@ public class AccessDataLoader
     /// </summary>
     private void LoadTableData(OleDbConnection connection, string originalName, string sanitized)
     {
-        using (var command = new OleDbCommand($"SELECT * FROM [{originalName}]", connection))
-        using (var adapter = new OleDbDataAdapter(command))
+        bool success = false;
+        int retryCount = 0;
+        while (!success && retryCount < 5) // Retry up to 5 times
         {
-            var table = new DataTable();
-            adapter.Fill(table);
-            _cache.Set(sanitized, table, new MemoryCacheEntryOptions
+            try
             {
-                Priority = CacheItemPriority.High,
-                SlidingExpiration = TimeSpan.FromHours(17)
-            });
-            Log.Information($"Loaded {table.Rows.Count} rows from {originalName} into cache.");
+                using (var command = new OleDbCommand($"SELECT * FROM [{originalName}]", connection))
+                using (var adapter = new OleDbDataAdapter(command))
+                {
+                    var table = new DataTable();
+                    adapter.Fill(table);
+                    success = true;
+                    _cache.Set(sanitized, table, new MemoryCacheEntryOptions
+                    {
+                        Priority = CacheItemPriority.High,
+                        SlidingExpiration = TimeSpan.FromHours(17)
+                    });
+                    Log.Information($"Loaded {table.Rows.Count} rows from {originalName} into cache.");
+                }
+            }
+            catch (OleDbException ex) when (ex.Message.Contains("already opened exclusively"))
+            {
+                retryCount++;
+                Thread.Sleep(1000); // Wait for 1 second before retrying
+                Log.Information($"Retrying to load table {originalName}. Attempt {retryCount}");
+                if (retryCount >= 5)
+                {
+                    Log.Error($"Failed to load table {originalName} after 5 attempts.");
+                    Log.Error(ex.Message);
+                }
+            }
+            catch (OleDbException ex)
+            {
+                Log.Error($"Failed to load table {originalName}: {ex.Message}");
+                Log.Error(ex.Message);
+                retryCount = 5; // Exit loop after first failure
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"Failed to load table {originalName}: {ex.Message}");
+                Log.Error(ex.Message);
+                retryCount = 5; // Exit loop after first failure
+            }
         }
     }
 
@@ -134,7 +174,7 @@ public class AccessDataLoader
     /// </summary>
     public void PrintCachedData()
     {
-        foreach (var tableName in _tableNames)
+        foreach (var tableName in TableNames)
         {
             if (_cache.TryGetValue(tableName, out DataTable table))
             {
@@ -174,6 +214,7 @@ public class AccessDataLoader
         if (dt1.Rows.Count != dt2.Rows.Count)
         {
             Log.Information($"Mismatch in row count: {dt1.Rows.Count} vs {dt2.Rows.Count}");
+
             return false;
         }
         for (int i = 0; i < dt1.Rows.Count; i++)
@@ -189,4 +230,63 @@ public class AccessDataLoader
         }
         return true;
     }
+
+    //public class DataMismatch
+    //{
+    //    public int RowIndex { get; set; }
+    //    public string ColumnName { get; set; }
+    //    public object OldValue { get; set; }
+    //    public object NewValue { get; set; }
+    //}
+
+    //public List<DataMismatch> FindMismatches(DataTable dt1, DataTable dt2)
+    //{
+    //    List<DataMismatch> mismatches = new List<DataMismatch>();
+    //    if (dt1.Rows.Count != dt2.Rows.Count)
+    //    {
+    //        Log.Information($"Row count mismatch: {dt1.Rows.Count} in SQL Server vs {dt2.Rows.Count} in Access");
+    //        // Consider handling row count differences if needed
+    //    }
+    //    for (int i = 0; i < Math.Min(dt1.Rows.Count, dt2.Rows.Count); i++)
+    //    {
+    //        foreach (DataColumn column in dt1.Columns)
+    //        {
+    //            if (!Equals(dt1.Rows[i][column], dt2.Rows[i][column]))
+    //            {
+    //                mismatches.Add(new DataMismatch
+    //                {
+    //                    RowIndex = i,
+    //                    ColumnName = column.ColumnName,
+    //                    OldValue = dt1.Rows[i][column],
+    //                    NewValue = dt2.Rows[i][column]
+    //                });
+    //            }
+    //        }
+    //    }
+    //    return mismatches;
+    //}
+
+
+
+
+
+
+
+
+    // This was added to allow the connection string to be changed after the object is created
+    // from a standard connection string to read only. However, that distinction didn't make much of a difference
+    // during data handling. Leaving it here for future use.
+    public string ConnectionString
+    {
+        get => _connectionString;
+        set
+        {
+            if (_connectionString != value)
+            {
+                _connectionString = value;
+                // Optionally add logic to handle connection changes, like reinitializing connections
+            }
+        }
+    }
+
 }
